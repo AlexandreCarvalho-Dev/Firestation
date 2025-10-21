@@ -1,0 +1,60 @@
+.background {
+  display: block;
+  align-items: center;
+}
+
+.header {
+  display: flex;
+  flex-direction: row;
+  margin: auto;
+  justify-content: center;
+  align-items: center;
+  color: white;
+}
+
+.header select{
+  color: white;
+  background-color: red;
+  height: 30px;
+  padding-left: 20px;
+  border: none;
+}
+
+button {
+  border-radius: 50px;
+}
+
+.diarios {
+  border-radius: 30px;
+  background-color: rgba(255, 255, 255, 0.4);
+  width: 90%;
+  height: 150px;
+  margin: auto;
+  display: flex;           
+  flex-direction: column;    
+  align-items: center;      
+  padding: 10px;   
+  color: white;
+}
+
+.veiculos-diarios button{
+  margin-right: 10px;
+  background-color: red;
+  color: white;
+}
+
+.admin {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+
+}
+
+.admin button {
+  width: 200px;
+  margin: auto;
+  margin: 10px;
+  background-color: red;
+  color: white;
+}
+

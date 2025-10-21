@@ -1,0 +1,96 @@
+@import url('https://fonts.googleapis.com/css2?family=Karantina:wght@300;400;700&display=swap');
+
+.header {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    margin: auto auto 15% auto;
+}
+
+html, body {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    font-family: Arial, sans-serif;
+    background-image: url('../assets/Login-background.jpg');
+    background-size: cover;
+    background-position: center;
+}
+
+.header img {
+    width: 30%;
+    height: auto;
+    margin-left: 10%;
+    margin-right: 5%;
+}
+
+.header h2 {
+    color: red;
+    font-family: 'Karantina', cursive;
+    font-size: 28px;
+}
+
+.card {
+    background-color: rgba(255, 255, 255, 0.40);
+    border-radius: 50px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 80%;
+    height: 60%;
+    margin: auto auto 20% auto;
+}
+
+.card h1 {
+    color: white;
+    font-family: 'Karantina', cursive;
+    margin-bottom: 10%;
+}
+
+.card input {
+    background-color: rgba(255, 255, 255, 0.40);
+    border-radius: 50px;
+    border: none;
+    margin-bottom: 5%;
+    height: 30px;
+    width: 60%;
+}
+
+.card input::placeholder {
+  color: rgba(0, 0, 0, 0.5); /* preto com 50% de opacidade */
+}
+
+.card button:not(.link-btn, #final) {
+    background-color: #ff0000c5;
+    border-radius: 50px;
+    border: none;
+    color: white;
+    font-family: 'Karantina', cursive;
+    padding: 10px 20px;
+    cursor: pointer;
+    width: 30%;
+}
+
+.card a {
+    color: black;
+    font-size: 8px;
+} 
+
+.links {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    width: 60%;
+    margin-bottom: 5%;
+}
+
+.link-btn {
+    background: none;
+    border: none;
+    color: black;
+    text-decoration: underline;
+    cursor: pointer;
+    padding: 0;
+    font-size: 8px;
+    margin: 2% 0;
+}

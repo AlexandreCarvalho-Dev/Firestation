@@ -1,0 +1,146 @@
+/* Página centrada e estreita */
+.veh-page {
+  padding: 8px;
+  background: #fff;
+  min-height: 100vh;
+  color: #111;
+  max-width: 420px;
+  margin: 0 auto;
+  overflow-x: hidden;
+}
+
+/* Header compacto */
+.veh-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.veh-header h1 {
+  margin: 0;
+  font-size: 16px;
+}
+
+/* Ícones (voltar / home) pequenos */
+.icon {
+  background: #f0f0f0;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  font-size: 12px;
+}
+.icon:active { transform: scale(0.96); }
+
+/* Legenda (opcional) */
+.legend {
+  display: grid;
+  grid-template-columns: 1fr 120px 1fr 1fr 1fr;
+  gap: 6px;
+  margin: 6px 0 0;
+  font-size: 12px;
+}
+.pill {
+  border: 1px solid #ddd;
+  background: #fafafa;
+  padding: 4px 8px;
+  border-radius: 8px;
+  font-weight: 600;
+}
+.center { text-align: center; }
+
+/* Secções por cofre */
+.cofre {
+  margin-top: 12px;
+  border: 1px solid #d0d0d0;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.cofre h2 {
+  margin: 0;
+  padding: 6px;
+  text-align: center;
+  background: #f7f7f7;
+  border-bottom: 1px solid #e6e6e6;
+  font-size: 14px;
+}
+
+/* Tabela */
+.inv {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  table-layout: fixed;  /* respeita larguras do colgroup */
+}
+.inv th, .inv td {
+  border-top: 1px solid #e6e6e6;
+  padding: 4px;
+  word-wrap: break-word;
+}
+.inv thead th {
+  background: #fafafa;
+  font-weight: 600;
+  text-align: center;
+}
+.inv tbody td:first-child { text-align: left; }
+
+.inv .num {
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* Larguras por coluna (com <colgroup>) */
+.col-material { width: 44%; }
+.col-qty      { width: 16%; }
+.col-ctrl     { width: 13.33%; } /* Presente / Falta / INOP */
+
+/* Inputs nos controlos */
+.qty-input {
+  width: 40px;          /* compacto */
+  height: 24px;
+  text-align: center;
+  font-size: 12px;
+  padding: 2px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  appearance: textfield;
+}
+
+/* Remove setas no Chrome */
+.qty-input::-webkit-outer-spin-button,
+.qty-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* Mensagens */
+.muted { opacity: 0.7; padding: 8px 0; text-align: center; font-size: 12px; }
+.erro  { color: #b00020; font-weight: 600; margin: 8px 0; font-size: 12px; }
+
+/* Botões do rodapé */
+.footer-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 12px;
+}
+.btn-primary, .btn-secondary {
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 6px;
+}
+.btn-primary { background: #1b74e4; color: #fff; border: none; }
+.btn-secondary { background: #f0f0f0; color: #111; border: 1px solid #ccc; }
+.btn-primary:active, .btn-secondary:active { transform: scale(0.98); }
+
+/* Ajustes ligeiros em ecrãs um pouco maiores */
+@media (min-width: 480px) {
+  .veh-page { max-width: 520px; }
+  .inv { font-size: 13px; }
+  .qty-input { width: 44px; height: 26px; font-size: 13px; }
+  .veh-header h1 { font-size: 18px; }
+}

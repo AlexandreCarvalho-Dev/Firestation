@@ -1,0 +1,63 @@
+/* src/pages/inventarios.css */
+.page { 
+    padding: 3px;
+    color: white;
+}
+
+.page button, select{
+    background-color: red;
+    margin: 0px 10px 10px 0;
+    color: white;
+}
+
+.page select{
+    height: 30px;
+    background-color: rgba(255, 255, 255, 0.30);
+    border: none;
+    border-radius: 30px;
+}
+
+.page input {
+    height: 30px;
+    margin-right: 10px;
+    background-color: rgba(255, 255, 255, 0.30);
+    border: none;
+    border-radius: 30px;
+}
+
+.toolbar { 
+    display: flex; 
+    gap: 8px; 
+    margin-bottom: 16px; 
+}
+.tabela { 
+    width: 100%; 
+    border-collapse: collapse; 
+}
+.tabela th, .tabela td { 
+    border: 1px solid #333; 
+    padding: 8px; 
+}
+.tabela .num { 
+    text-align: right; 
+}
+.muted { 
+    opacity: 0.7; 
+    text-align: center; 
+}
+.erro { 
+    color: #f55; 
+}
+
+.page #quantidade {
+    width: 90px;
+}
+
+.entrada-form button {
+    margin-top: 10px;
+}
+
+.toolbar {
+    padding-top: 50px;
+}
+
