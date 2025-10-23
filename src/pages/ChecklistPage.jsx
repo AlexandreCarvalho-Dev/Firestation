@@ -1,173 +1,249 @@
 // src/pages/ChecklistPage.jsx
 import { useEffect, useMemo, useState } from 'react';
-import { API_BASE } from '../lib/api';      // <— caminho correto a partir de /pages
+import { API_BASE } from '../lib/api';
 import './vehicle.css';
 
 export default function ChecklistPage({ idVeiculo, codigoVeiculo, onBack }) {
-  const [rows, setRows] = useState([]);
+  const [rows, setRows] = useState([]);          // linhas vindas da API (por cofre)
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState('');
 
-  // { [id_equip]: { presente, falta, inop, qty, nome, cofre } }
+  // Estado por (cofre:id_equip) → chave `${id_cofre}:${id_equip}`
+  // Guardamos: baseQty (da API), falta, inop
   const [counts, setCounts] = useState({});
+  const keyFor = (r) => `${r.id_cofre}:${r.id_equip}`;
 
   useEffect(() => {
-    setLoading(true);
-    setErro('');
-    fetch(`${API_BASE}/veiculo/${idVeiculo}/inventario`)
-      .then(async r => {
+    let alive = true;
+    (async () => {
+      try {
+        setLoading(true);
+        setErro('');
+        const r = await fetch(`${API_BASE}/veiculo/${idVeiculo}/inventario`);
         if (!r.ok) {
-          const body = await r.json().catch(() => ({}));
-          throw new Error(body?.error || `HTTP ${r.status}`);
+          const b = await r.json().catch(() => ({}));
+          throw new Error(b?.error || `HTTP ${r.status}`);
         }
-        return r.json();
-      })
-      .then(data => {
+        const data = await r.json();
+        if (!alive) return;
+
         setRows(data);
         const init = {};
-        for (const x of data) {
-          const qtyNum = Number(x.qty) || 0;
-          init[x.id_equip] = {
-            presente: qtyNum,
-            falta: 0,
-            inop: 0,
-            qty: qtyNum,
-            nome: x.equipamento,
-            cofre: x.cofre
-          };
+        for (const row of data) {
+          const base = Number(row.qty ?? 0);
+          init[keyFor(row)] = { baseQty: base, falta: 0, inop: 0 };
         }
         setCounts(init);
-      })
-      .catch(e => setErro(e.message))
-      .finally(() => setLoading(false));
+      } catch (e) {
+        if (alive) setErro(e.message);
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => { alive = false; };
   }, [idVeiculo]);
 
-  // Agrupar por nome de cofre
   const porCofre = useMemo(() => {
-    const map = new Map();
+    const m = new Map();
     for (const r of rows) {
-      if (!map.has(r.cofre)) map.set(r.cofre, []);
-      map.get(r.cofre).push(r);
+      if (!m.has(r.cofre)) m.set(r.cofre, []);
+      m.get(r.cofre).push(r);
     }
-    return Array.from(map.entries()); // [ [cofre, items], ... ]
+    return [...m.entries()];
   }, [rows]);
 
-  // Ajuste com regras: sem negativos, soma == qty
-  const adjust = (id_equip, field, delta) => {
+  function patchLinha(r, fn) {
+    const k = keyFor(r);
     setCounts(prev => {
-      const cur = prev[id_equip];
-      if (!cur) return prev;
-
-      const next = { ...cur, [field]: cur[field] + delta };
-      next.presente = Math.max(0, next.presente);
-      next.falta    = Math.max(0, next.falta);
-      next.inop     = Math.max(0, next.inop);
-
-      let sum = next.presente + next.falta + next.inop;
-
-      if (sum > cur.qty) {
-        // remover excesso dos outros campos (mantém o campo clicado)
-        let overflow = sum - cur.qty;
-        const order = ['falta', 'inop', 'presente'].filter(k => k !== field);
-        for (const k of order) {
-          if (overflow === 0) break;
-          const take = Math.min(overflow, next[k]);
-          next[k] -= take;
-          overflow -= take;
+      const cur = prev[k] || { baseQty: Number(r.qty ?? 0), falta: 0, inop: 0 };
+      const next = fn({ ...cur });
+      // clamp para garantir 0 <= falta+inop <= baseQty
+      const totalOut = Math.min(next.baseQty, Math.max(0, next.falta + next.inop));
+      const excesso = totalOut - (next.falta + next.inop);
+      if (excesso !== 0) {
+        // se por alguma razão passou do limite, ajusta INOP por último
+        if (excesso < 0) {
+          // reduzir
+          const reduzir = -excesso;
+          const tiraInop = Math.min(reduzir, next.inop);
+          next.inop -= tiraInop;
+          const faltaRest = reduzir - tiraInop;
+          if (faltaRest > 0) next.falta = Math.max(0, next.falta - faltaRest);
         }
-      } else if (sum < cur.qty) {
-        // completa no presente
-        next.presente = Math.min(cur.qty, next.presente + (cur.qty - sum));
       }
-      return { ...prev, [id_equip]: next };
+      return { ...prev, [k]: next };
     });
+  }
+
+  const getPresente = (k) => {
+    const c = counts[k];
+    if (!c) return 0;
+    const p = c.baseQty - c.falta - c.inop;
+    return Math.max(0, Math.min(c.baseQty, p));
   };
 
-  const CellCtrls = ({ id_equip, field }) => (
-    <div className="ctr">
-      <button className="btn minus" onClick={() => adjust(id_equip, field, -1)}>-</button>
-      <span className="num">{counts[id_equip]?.[field] ?? 0}</span>
-      <button className="btn plus" onClick={() => adjust(id_equip, field, +1)}>+</button>
-    </div>
-  );
+  // Payload novo: { id_cofre, id_equip, presente, falta, inop }
+  function toItemsPayload() {
+    const itens = [];
+    for (const r of rows) {
+      const k = keyFor(r);
+      const c = counts[k];
+      if (!c) continue;
+      itens.push({
+        id_cofre: r.id_cofre,
+        id_equip: r.id_equip,
+        presente: getPresente(k),
+        falta: c.falta,
+        inop: c.inop,
+      });
+    }
+    return itens;
+  }
 
-  const exportarChecklist = () => {
-    const payload = Object.entries(counts).map(([id, c]) => ({
-      id_equip: Number(id),
-      cofre: c.cofre,
-      presente: c.presente,
-      falta: c.falta,
-      inop: c.inop,
-      qty: c.qty
-    }));
-    const blob = new Blob([JSON.stringify({
-      veiculo: { id: idVeiculo, codigo: codigoVeiculo },
-      data: payload
-    }, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `checklist_${codigoVeiculo || idVeiculo}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
+  async function handleGuardarPDF() {
+    try {
+      setLoading(true);
+      setErro('');
+      const body = { id_veiculo: idVeiculo, itens: toItemsPayload() };
+      const r = await fetch(`${API_BASE}/checklists`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(body)
+      });
+      if (!r.ok) {
+        const e = await r.json().catch(() => ({}));
+        throw new Error(e?.error || `HTTP ${r.status}`);
+      }
+      const data = await r.json();
+      window.open(`${API_BASE}/checklists/${data.id}/pdf`, '_blank');
+    } catch (e) {
+      setErro(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  if (loading && rows.length === 0) {
+    return (
+      <div className="veh-page">
+        <div className="veh-header">
+          <button className="icon" onClick={onBack} aria-label="Voltar">←</button>
+          <h1>{codigoVeiculo || `Veículo #${idVeiculo}`}</h1>
+          <button className="btn-primary save-btn" disabled>Guardar e PDF</button>
+        </div>
+        <p className="muted">A carregar…</p>
+      </div>
+    );
+  }
 
   return (
     <div className="veh-page">
+      {/* Header fixo */}
       <div className="veh-header">
-        <button className="icon back" onClick={onBack} aria-label="Voltar">←</button>
-        <h1>{codigoVeiculo || `Veículo ${idVeiculo}`}</h1>
-        <button className="icon home" onClick={onBack} aria-label="Home">⌂</button>
+        <button className="icon" onClick={onBack} aria-label="Voltar">←</button>
+        <h1>{codigoVeiculo || `Veículo #${idVeiculo}`}</h1>
+        <button
+          className="btn-primary save-btn"
+          onClick={handleGuardarPDF}
+          disabled={rows.length === 0 || loading}
+          title="Guardar e gerar PDF"
+        >
+          Guardar e PDF
+        </button>
       </div>
 
-      {loading && <p className="muted">A carregar…</p>}
       {erro && <p className="erro">{erro}</p>}
 
-      {!loading && porCofre.map(([cofre, items]) => (
-        <section key={cofre} className="cofre">
-          <h2>{cofre}</h2>
+      {porCofre.map(([cofre, linhas]) => (
+        <div className="cofre" key={cofre}>
+          <h3>{cofre}</h3>
+
           <table className="inv">
-            {/* colunas estáticas */}
             <colgroup>
               <col className="col-material" />
-              <col className="col-qty" />
-              <col className="col-ctrl" />
-              <col className="col-ctrl" />
-              <col className="col-ctrl" />
+              <col className="col-presente" />
+              <col className="col-falta" />
+              <col className="col-inop" />
             </colgroup>
             <thead>
               <tr>
                 <th>Material</th>
-                <th className="num">Quantidade</th>
                 <th>Presente</th>
                 <th>Falta</th>
                 <th>INOP</th>
               </tr>
             </thead>
             <tbody>
-              {items.map(it => (
-                <tr key={it.id_equip}>
-                  <td>{it.equipamento}</td>
-                  {/* só número, sem unidade */}
-                  <td className="num">{Number(it.qty) || 0}</td>
-                  <td><CellCtrls id_equip={it.id_equip} field="presente" /></td>
-                  <td><CellCtrls id_equip={it.id_equip} field="falta" /></td>
-                  <td><CellCtrls id_equip={it.id_equip} field="inop" /></td>
-                </tr>
-              ))}
+              {linhas.map(r => {
+                const k = keyFor(r);
+                const c = counts[k] || { baseQty: Number(r.qty ?? 0), falta: 0, inop: 0 };
+                const presente = getPresente(k);
+
+                const inc = (tipo) => patchLinha(r, cur => {
+                  if (cur.falta + cur.inop >= cur.baseQty) return cur; // já não há para tirar do presente
+                  return { ...cur, [tipo]: cur[tipo] + 1 };
+                });
+                const dec = (tipo) => patchLinha(r, cur => ({ ...cur, [tipo]: Math.max(0, cur[tipo] - 1) }));
+
+                return (
+                  <tr key={k}>
+                    <td>
+                      {r.equipamento} <span className="muted">({r.unidade})</span>
+                    </td>
+
+                    {/* Presente (read-only) */}
+                    <td className="num">
+                      <input className="qty-input readonly" readOnly value={presente} />
+                      <span className="muted small">/ {c.baseQty}</span>
+                    </td>
+
+                    {/* Falta */}
+                    <td className="num">
+                      <div className="stepper">
+                        <button
+                          type="button"
+                          className="step-btn"
+                          onClick={() => dec('falta')}
+                          aria-label="Diminuir falta"
+                        >−</button>
+                        <span className="step-val">{c.falta}</span>
+                        <button
+                          type="button"
+                          className="step-btn"
+                          onClick={() => inc('falta')}
+                          aria-label="Aumentar falta"
+                          disabled={c.falta + c.inop >= c.baseQty}
+                        >+</button>
+                      </div>
+                    </td>
+
+                    {/* INOP */}
+                    <td className="num">
+                      <div className="stepper">
+                        <button
+                          type="button"
+                          className="step-btn"
+                          onClick={() => dec('inop')}
+                          aria-label="Diminuir INOP"
+                        >−</button>
+                        <span className="step-val">{c.inop}</span>
+                        <button
+                          type="button"
+                          className="step-btn"
+                          onClick={() => inc('inop')}
+                          aria-label="Aumentar INOP"
+                          disabled={c.falta + c.inop >= c.baseQty}
+                        >+</button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
-        </section>
+        </div>
       ))}
-
-      {!loading && porCofre.length === 0 && (
-        <p className="muted">Sem inventário associado a este veículo.</p>
-      )}
-
-      <div className="footer-actions">
-        <button className="btn-secondary" onClick={onBack}>Cancelar</button>
-        <button className="btn-primary" onClick={exportarChecklist}>Exportar JSON</button>
-      </div>
     </div>
   );
 }

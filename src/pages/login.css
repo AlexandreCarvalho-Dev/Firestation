@@ -54,6 +54,8 @@ html, body {
     margin-bottom: 5%;
     height: 30px;
     width: 60%;
+    color: black;
+    font-size: 19px;
 }
 
 .card input::placeholder {

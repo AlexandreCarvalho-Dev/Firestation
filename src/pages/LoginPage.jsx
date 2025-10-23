@@ -1,6 +1,5 @@
 // src/pages/LoginPage.jsx
 import { useState } from 'react';
-import { API_BASE as API } from '../lib/api';
 import logo from '../assets/Logo_Bombeiros.png';
 import './login.css';
 
@@ -19,27 +18,10 @@ export default function LoginPage({ onLogin, onCreate }) {
     }
     setLoading(true);
     try {
-      const r = await fetch(`${API}/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',                // <— importante p/ cookie
-        body: JSON.stringify({ username, password })
-      });
-
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok || !data?.ok) {
-        const msg = data?.error === 'invalid_credentials'
-          ? 'Credenciais inválidas.'
-          : data?.error === 'missing_fields'
-          ? 'Faltam campos.'
-          : 'Falha no login.';
-        setError(msg);
-        return;
-      }
-
-      onLogin?.(data.user);
+      // usa o hook (onLogin vem do useAuth)
+      await onLogin?.({ username, password });
     } catch (err) {
-      setError('Erro de rede/servidor.');
+      setError(err?.message || 'Falha no login.');
     } finally {
       setLoading(false);
     }

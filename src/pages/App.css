@@ -3,6 +3,22 @@
   align-items: center;
 }
 
+.session {
+  margin: auto;
+  width: 90%;
+  color: white;
+  }
+
+  .session button {
+    background-color: red;
+    color: white;
+    border-radius: 50px;
+    margin-left: 30%;
+  }
+
+h1, h2 {
+  color: white;
+}
 .header {
   display: flex;
   flex-direction: row;

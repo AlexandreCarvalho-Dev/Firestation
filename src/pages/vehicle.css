@@ -9,20 +9,46 @@
   overflow-x: hidden;
 }
 
-/* Header compacto */
+/* Header compacto e fixo */
 .veh-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  margin-bottom: 10px;
+  margin: 0 0 10px 0;
+
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: #fff;
+  padding: calc(6px + env(safe-area-inset-top, 0px)) 8px 6px 8px;
+  border-bottom: 1px solid #e6e6e6;
 }
+
 .veh-header h1 {
   margin: 0;
   font-size: 16px;
+  text-align: center;
+  flex: 1; /* título centrado entre voltar e botão salvar */
 }
 
-/* Ícones (voltar / home) pequenos */
+/* Botão “Guardar e PDF” no lugar da casa */
+.save-btn {
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: #1b74e4;
+  color: #fff;
+  border: none;
+  white-space: nowrap;
+  min-width: 120px;
+}
+.save-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Ícone voltar à esquerda */
 .icon {
   background: #f0f0f0;
   border: 1px solid #ccc;
@@ -33,25 +59,9 @@
   place-items: center;
   cursor: pointer;
   font-size: 12px;
+  user-select: none;
 }
 .icon:active { transform: scale(0.96); }
-
-/* Legenda (opcional) */
-.legend {
-  display: grid;
-  grid-template-columns: 1fr 120px 1fr 1fr 1fr;
-  gap: 6px;
-  margin: 6px 0 0;
-  font-size: 12px;
-}
-.pill {
-  border: 1px solid #ddd;
-  background: #fafafa;
-  padding: 4px 8px;
-  border-radius: 8px;
-  font-weight: 600;
-}
-.center { text-align: center; }
 
 /* Secções por cofre */
 .cofre {
@@ -60,7 +70,7 @@
   border-radius: 8px;
   overflow: hidden;
 }
-.cofre h2 {
+.cofre h3 {
   margin: 0;
   padding: 6px;
   text-align: center;
@@ -74,7 +84,7 @@
   width: 100%;
   border-collapse: collapse;
   font-size: 12px;
-  table-layout: fixed;  /* respeita larguras do colgroup */
+  table-layout: fixed;
 }
 .inv th, .inv td {
   border-top: 1px solid #e6e6e6;
@@ -86,61 +96,65 @@
   font-weight: 600;
   text-align: center;
 }
-.inv tbody td:first-child { text-align: left; }
 
-.inv .num {
-  text-align: center;
-  white-space: nowrap;
-}
-
-/* Larguras por coluna (com <colgroup>) */
 .col-material { width: 44%; }
 .col-qty      { width: 16%; }
-.col-ctrl     { width: 13.33%; } /* Presente / Falta / INOP */
+.col-estado   { width: 24%; }
+.col-obs      { width: 16%; }
 
-/* Inputs nos controlos */
+.inv tbody td:first-child { text-align: left; }
+.inv .num { text-align: center; white-space: nowrap; }
+
+/* Inputs */
 .qty-input {
-  width: 40px;          /* compacto */
-  height: 24px;
+  width: 48px;
+  height: 26px;
   text-align: center;
-  font-size: 12px;
+  font-size: 13px;
   padding: 2px;
   border: 1px solid #ccc;
   border-radius: 4px;
   appearance: textfield;
 }
-
-/* Remove setas no Chrome */
 .qty-input::-webkit-outer-spin-button,
 .qty-input::-webkit-inner-spin-button {
   -webkit-appearance: none;
   margin: 0;
 }
 
+.inv input[type="text"] {
+  width: 100%;
+  height: 26px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  padding: 0 6px;
+  font-size: 12px;
+}
+
+/* Observações gerais */
+.obs-box {
+  margin: 12px 0 24px 0;
+  display: grid;
+  gap: 6px;
+}
+.obs-box textarea {
+  width: 100%;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  padding: 8px;
+  font-size: 13px;
+  resize: vertical;
+}
+
 /* Mensagens */
 .muted { opacity: 0.7; padding: 8px 0; text-align: center; font-size: 12px; }
 .erro  { color: #b00020; font-weight: 600; margin: 8px 0; font-size: 12px; }
 
-/* Botões do rodapé */
-.footer-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 6px;
-  margin-top: 12px;
-}
-.btn-primary, .btn-secondary {
-  font-size: 12px;
-  padding: 6px 10px;
-  border-radius: 6px;
-}
-.btn-primary { background: #1b74e4; color: #fff; border: none; }
-.btn-secondary { background: #f0f0f0; color: #111; border: 1px solid #ccc; }
-.btn-primary:active, .btn-secondary:active { transform: scale(0.98); }
-
-/* Ajustes ligeiros em ecrãs um pouco maiores */
+/* Ajustes em ecrãs um pouco maiores */
 @media (min-width: 480px) {
   .veh-page { max-width: 520px; }
   .inv { font-size: 13px; }
-  .qty-input { width: 44px; height: 26px; font-size: 13px; }
+  .qty-input { width: 56px; height: 28px; font-size: 13px; }
   .veh-header h1 { font-size: 18px; }
+  .save-btn { font-size: 13px; padding: 8px 12px; }
 }

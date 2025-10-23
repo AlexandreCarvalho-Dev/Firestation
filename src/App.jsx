@@ -3,9 +3,10 @@ import { useState } from 'react';
 import { useAuth } from './hooks/useAuth.js';
 import LoginPage from './pages/LoginPage.jsx';
 import CreateAccountPage from './pages/CreateAccountPage.jsx';
+import InventorysCheckListsPage from './pages/InventorysCheckListsPage.jsx';
 
 export default function App() {
-  const { user, checking, login } = useAuth();
+  const { user, checking, login, logout } = useAuth();
   const [guestScreen, setGuestScreen] = useState('login'); // 'login' | 'create'
 
   if (checking) return <p style={{ padding:16 }}>A verificar sessão…</p>;
@@ -16,23 +17,20 @@ export default function App() {
       return (
         <CreateAccountPage
           onBack={() => setGuestScreen('login')}
-          onCreated={() => setGuestScreen('login')} // opcional, volta ao login após criar
+          onCreated={() => setGuestScreen('login')}
         />
       );
     }
     return (
       <LoginPage
-        onLogin={login}
-        onCreate={() => setGuestScreen('create')}   // <- AQUI FAZ A MUDANÇA
+        onLogin={login}                   // chama o hook
+        onCreate={() => setGuestScreen('create')}
       />
     );
   }
 
-  // Autenticado → resto da app
+  // Autenticado → página protegida
   return (
-    <div style={{ padding:16 }}>
-      <h1>Área autenticada</h1>
-      {/* o teu conteúdo protegido */}
-    </div>
+    <InventorysCheckListsPage user={user} onLogout={logout} />
   );
 }
