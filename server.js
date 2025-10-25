@@ -6,7 +6,7 @@ import bcrypt from "bcryptjs";
 import cookieParser from "cookie-parser";
 import jwt from "jsonwebtoken";
 import rateLimit from "express-rate-limit";
-import PDFDocument from "pdfkit"; // <-- PDF
+import PDFDocument from "pdfkit";
 import fs from "fs";
 import fsp from "fs/promises";
 import path from "path";
@@ -34,14 +34,14 @@ const __dirname = path.dirname(__filename);
 const STORAGE_DIR = path.join(__dirname, "storage", "checklists");
 await fsp.mkdir(STORAGE_DIR, { recursive: true });
 
-// ========================= CORS =========================
+// ========================= CORS =========================. http://172.20.10.3:5173
 const allowlist = CLIENT_ORIGINS.split(",").map(s => s.trim()).filter(Boolean);
 function isLanDevOrigin(origin) {
   if (IS_PROD || !origin) return false;
   try {
     const u = new URL(origin);
     return u.protocol === "http:" &&
-           /^192\.168\.\d{1,3}\.\d{1,3}$/.test(u.hostname) &&
+           /^172\.20\.10\.\d{1,3}$/.test(u.hostname) &&
            (u.port === "5173" || u.port === "");
   } catch { return false; }
 }
@@ -87,6 +87,54 @@ async function getCofreLocalId(idVeic, idCofre) {
     [idVeic, idCofre]
   );
   return r?.id_local ?? null;
+}
+async function getQtyForUpdate(id_local, id_equip) {
+  const [[row]] = await db.query(
+    `SELECT qty FROM inventario_saldo WHERE id_local=? AND id_equip=? FOR UPDATE`,
+    [id_local, id_equip]
+  );
+  return row?.qty ?? 0;
+}
+async function ensureSaldoRow(id_local, id_equip) {
+  await db.query(
+    `INSERT IGNORE INTO inventario_saldo (id_local, id_equip, qty) VALUES (?, ?, 0)`,
+    [id_local, id_equip]
+  );
+}
+
+// ===== Helpers Secção (NOVOS) =====
+async function ensureArmazemLocalBySecaoId(id_secao) {
+  const [[ex]] = await db.query(
+    `SELECT id_local FROM localizacao WHERE tipo='SECAO' AND id_secao=? LIMIT 1`,
+    [id_secao]
+  );
+  if (ex?.id_local) return ex.id_local;
+
+  const [[sec]] = await db.query(`SELECT nome FROM secao WHERE id_secao=?`, [id_secao]);
+  if (!sec?.nome) throw new Error('secao_nao_encontrada');
+
+  const nomeLocal = `Armazém ${sec.nome}`;
+  const [ins] = await db.query(
+    `INSERT INTO localizacao (tipo, id_secao, nome) VALUES ('SECAO', ?, ?)`,
+    [id_secao, nomeLocal]
+  );
+  return ins.insertId;
+}
+async function ensureEquipamentoOnSecao(id_secao, nomeEquip, unidade = 'un') {
+  try {
+    const [ins] = await db.query(
+      `INSERT INTO equipamento (nome, unidade, id_secao) VALUES (?,?,?)`,
+      [nomeEquip, unidade, id_secao]
+    );
+    return ins.insertId;
+  } catch (e) {
+    if (e?.code !== 'ER_DUP_ENTRY') throw e;
+    const [[r]] = await db.query(
+      `SELECT id_equip FROM equipamento WHERE nome=? AND id_secao=? LIMIT 1`,
+      [nomeEquip, id_secao]
+    );
+    return r?.id_equip || null;
+  }
 }
 
 // ========================= Auth (JWT em cookie httpOnly) =========================
@@ -160,7 +208,101 @@ app.get("/veiculo/:id/inventario", async (req, res) => {
   } catch (e) { res.status(500).json({ error:e.message }); }
 });
 
+// ===== Movimentos entre ARMAZÉM da secção e COFRE do veículo =====
+app.post('/veiculo/:id/cofre/:cofreId/entrada', async (req, res) => {
+  const idVeic   = Number.parseInt(req.params.id, 10);
+  const idCofre  = Number.parseInt(req.params.cofreId, 10);
+  const id_equip = Number.parseInt(req.body?.id_equip, 10);
+  const qty      = Number.parseInt(req.body?.qty, 10);
+
+  if (![idVeic,idCofre,id_equip,qty].every(Number.isInteger) || qty <= 0)
+    return res.status(400).json({ ok:false, error:'payload_invalido' });
+
+  await db.beginTransaction();
+  try {
+    const id_local_cofre = await getCofreLocalId(idVeic, idCofre);
+    if (!id_local_cofre) throw new Error('cofre_nao_encontrado');
+
+    const [[equip]] = await db.query(
+      `SELECT id_secao FROM equipamento WHERE id_equip=?`,
+      [id_equip]
+    );
+    if (!equip?.id_secao) throw new Error('equipamento_nao_encontrado');
+
+    const id_local_armazem = await getLocArmazemIdBySecao(equip.id_secao);
+    if (!id_local_armazem) throw new Error('armazem_secao_nao_encontrado');
+
+    await ensureSaldoRow(id_local_armazem, id_equip);
+    await ensureSaldoRow(id_local_cofre,   id_equip);
+
+    const disponivel = await getQtyForUpdate(id_local_armazem, id_equip);
+    if (qty > disponivel) throw new Error(`sem_stock_armazem:${disponivel}`);
+
+    await db.query(
+      `UPDATE inventario_saldo SET qty = qty - ? WHERE id_local=? AND id_equip=?`,
+      [qty, id_local_armazem, id_equip]
+    );
+    await db.query(
+      `UPDATE inventario_saldo SET qty = qty + ? WHERE id_local=? AND id_equip=?`,
+      [qty, id_local_cofre, id_equip]
+    );
+
+    await db.commit();
+    return res.json({ ok:true });
+  } catch (e) {
+    await db.rollback().catch(()=>{});
+    return res.status(400).json({ ok:false, error: e.message || 'erro_movimento' });
+  }
+});
+
+app.post('/veiculo/:id/cofre/:cofreId/saida', async (req, res) => {
+  const idVeic   = Number.parseInt(req.params.id, 10);
+  const idCofre  = Number.parseInt(req.params.cofreId, 10);
+  const id_equip = Number.parseInt(req.body?.id_equip, 10);
+  const qty      = Number.parseInt(req.body?.qty, 10);
+
+  if (![idVeic,idCofre,id_equip,qty].every(Number.isInteger) || qty <= 0)
+    return res.status(400).json({ ok:false, error:'payload_invalido' });
+
+  await db.beginTransaction();
+  try {
+    const id_local_cofre = await getCofreLocalId(idVeic, idCofre);
+    if (!id_local_cofre) throw new Error('cofre_nao_encontrado');
+
+    const [[equip]] = await db.query(
+      `SELECT id_secao FROM equipamento WHERE id_equip=?`,
+      [id_equip]
+    );
+    if (!equip?.id_secao) throw new Error('equipamento_nao_encontrado');
+
+    const id_local_armazem = await getLocArmazemIdBySecao(equip.id_secao);
+    if (!id_local_armazem) throw new Error('armazem_secao_nao_encontrado');
+
+    await ensureSaldoRow(id_local_cofre,   id_equip);
+    await ensureSaldoRow(id_local_armazem, id_equip);
+
+    const noCofre = await getQtyForUpdate(id_local_cofre, id_equip);
+    if (qty > noCofre) throw new Error(`sem_stock_cofre:${noCofre}`);
+
+    await db.query(
+      `UPDATE inventario_saldo SET qty = qty - ? WHERE id_local=? AND id_equip=?`,
+      [qty, id_local_cofre, id_equip]
+    );
+    await db.query(
+      `UPDATE inventario_saldo SET qty = qty + ? WHERE id_local=? AND id_equip=?`,
+      [qty, id_local_armazem, id_equip]
+    );
+
+    await db.commit();
+    return res.json({ ok:true });
+  } catch (e) {
+    await db.rollback().catch(()=>{});
+    return res.status(400).json({ ok:false, error: e.message || 'erro_movimento' });
+  }
+});
+
 // ========================= Secção (Material) =========================
+// GETs existentes
 app.get("/secao/:nome/catalogo", async (req, res) => {
   try {
     const [rows] = await db.query(
@@ -232,70 +374,246 @@ app.get("/secao/:nome/inventario", async (req, res) => {
   } catch (e) { res.status(500).json({ error:e.message }); }
 });
 
-// ===== Entradas/Saídas do ARMAZÉM da secção (exemplos) =====
-app.post("/secao/:nome/entrada", async (req, res) => {
-  const nomeSecao = req.params.nome;
-  const id_equip = Number.parseInt(req.body?.id_equip, 10);
-  const qty = Number.parseInt(req.body?.qty, 10);
-  if (!Number.isInteger(id_equip) || !Number.isInteger(qty) || qty <= 0)
-    return res.status(400).json({ error:"id_equip e qty (inteiros > 0) são obrigatórios" });
+// ===== NOVAS rotas Secção =====
+app.post('/secao/:nome/equipamento', requireAuth, async (req, res) => {
+  const secaoNome = req.params.nome;
+  const { nome = '', qty, unidade = 'un' } = req.body || {};
+  const qtd = Number.parseInt(qty, 10);
 
-  await db.beginTransaction();
+  if (!nome.trim() || !Number.isInteger(qtd) || qtd <= 0) {
+    return res.status(400).json({ ok:false, error:'invalid_payload' });
+  }
+
   try {
-    const id_secao = await getSecaoIdByNome(nomeSecao);
-    if (!id_secao) throw new Error("Secção não encontrada");
-    const id_local = await getLocArmazemIdBySecao(id_secao);
-    if (!id_local) throw new Error("Armazém da secção não encontrado");
+    const id_secao = await getSecaoIdByNome(secaoNome);
+    if (!id_secao) return res.status(404).json({ ok:false, error:'secao_not_found' });
 
+    await db.beginTransaction();
+
+    const id_local = await ensureArmazemLocalBySecaoId(id_secao);
+    const id_equip = await ensureEquipamentoOnSecao(id_secao, nome.trim(), unidade);
+    if (!id_equip) throw new Error('equip_insert_failed');
+
+    await ensureSaldoRow(id_local, id_equip);
     await db.query(
-      `INSERT INTO inventario_saldo (id_local, id_equip, qty)
-       VALUES (?, ?, ?)
-       ON DUPLICATE KEY UPDATE qty = qty + VALUES(qty)`,
-      [id_local, id_equip, qty]
+      `UPDATE inventario_saldo SET qty = qty + ? WHERE id_local=? AND id_equip=?`,
+      [qtd, id_local, id_equip]
     );
 
     await db.commit();
-    res.json({ success:true });
-  } catch (e) { await db.rollback(); res.status(500).json({ error:e.message }); }
+    return res.json({ ok:true, id_equip, added:qtd });
+  } catch (e) {
+    await db.rollback().catch(()=>{});
+    console.error('POST /secao/:nome/equipamento', e);
+    return res.status(400).json({ ok:false, error: e.message || 'server_error' });
+  }
 });
 
-// ========================= Checklists (NOVO) =========================
+app.post('/secao/:nome/entrada', requireAuth, async (req, res) => {
+  const secaoNome = req.params.nome;
+  const id_equip = Number.parseInt(req.body?.id_equip, 10);
+  const qty      = Number.parseInt(req.body?.qty, 10);
 
-// util: gerar e guardar PDF em disco + atualizar caminho na BD
+  if (![id_equip, qty].every(Number.isInteger) || qty <= 0) {
+    return res.status(400).json({ ok:false, error:'invalid_payload' });
+  }
+
+  try {
+    const id_secao = await getSecaoIdByNome(secaoNome);
+    if (!id_secao) return res.status(404).json({ ok:false, error:'secao_not_found' });
+
+    const [[eq]] = await db.query(
+      `SELECT id_equip FROM equipamento WHERE id_equip=? AND id_secao=?`,
+      [id_equip, id_secao]
+    );
+    if (!eq) return res.status(400).json({ ok:false, error:'equip_nao_da_secao' });
+
+    await db.beginTransaction();
+    const id_local = await ensureArmazemLocalBySecaoId(id_secao);
+    await ensureSaldoRow(id_local, id_equip);
+    await db.query(
+      `UPDATE inventario_saldo SET qty = qty + ? WHERE id_local=? AND id_equip=?`,
+      [qty, id_local, id_equip]
+    );
+    await db.commit();
+    return res.json({ ok:true });
+  } catch (e) {
+    await db.rollback().catch(()=>{});
+    console.error('POST /secao/:nome/entrada', e);
+    return res.status(400).json({ ok:false, error: e.message || 'server_error' });
+  }
+});
+
+app.post('/secao/:nome/saida', requireAuth, async (req, res) => {
+  const secaoNome = req.params.nome;
+  const id_equip = Number.parseInt(req.body?.id_equip, 10);
+  const qty      = Number.parseInt(req.body?.qty, 10);
+
+  if (![id_equip, qty].every(Number.isInteger) || qty <= 0) {
+    return res.status(400).json({ ok:false, error:'invalid_payload' });
+  }
+
+  try {
+    const id_secao = await getSecaoIdByNome(secaoNome);
+    if (!id_secao) return res.status(404).json({ ok:false, error:'secao_not_found' });
+
+    const [[eq]] = await db.query(
+      `SELECT id_equip FROM equipamento WHERE id_equip=? AND id_secao=?`,
+      [id_equip, id_secao]
+    );
+    if (!eq) return res.status(400).json({ ok:false, error:'equip_nao_da_secao' });
+
+    await db.beginTransaction();
+    const id_local = await ensureArmazemLocalBySecaoId(id_secao);
+    await ensureSaldoRow(id_local, id_equip);
+
+    const atual = await getQtyForUpdate(id_local, id_equip);
+    if (qty > atual) {
+      await db.rollback().catch(()=>{});
+      return res.status(400).json({ ok:false, error:`sem_stock:${atual}` });
+    }
+
+    await db.query(
+      `UPDATE inventario_saldo SET qty = qty - ? WHERE id_local=? AND id_equip=?`,
+      [qty, id_local, id_equip]
+    );
+    await db.commit();
+    return res.json({ ok:true });
+  } catch (e) {
+    await db.rollback().catch(()=>{});
+    console.error('POST /secao/:nome/saida', e);
+    return res.status(400).json({ ok:false, error: e.message || 'server_error' });
+  }
+});
+
+// ========================= Checklists =========================
+function fmtPT(d) {
+  const dt = new Date(d);
+  const p = n => String(n).padStart(2, "0");
+  return `${p(dt.getDate())}/${p(dt.getMonth() + 1)}/${dt.getFullYear()}, ${p(dt.getHours())}:${p(dt.getMinutes())}:${p(dt.getSeconds())}`;
+}
+function drawHeader(doc, meta, logoPath = null) {
+  const left = 42;
+  const top = 36;
+  const right = doc.page.width - 42;
+
+  if (logoPath) {
+    try { doc.image(logoPath, left, top - 4, { width: 60 }); } catch {}
+  }
+
+  doc.font("Helvetica-Bold").fontSize(16)
+    .text("Checklist de Verificação de Veículo", left, top, { width: right - left, align: "center" });
+
+  doc.moveDown(0.6);
+  doc.font("Helvetica").fontSize(10);
+  const lh = 14;
+  let y = top + 28;
+  doc.text(`ID: ${meta.id}`, left, y);          y += lh;
+  doc.text(`Veículo: ${meta.veiculo}`, left, y); y += lh;
+  doc.text(`Data: ${fmtPT(meta.created_at)}`, left, y); y += lh;
+  if (meta.autor || meta.autor_apelido) {
+    doc.text(`Responsável: ${(meta.autor || "")} ${(meta.autor_apelido || "")}`.trim(), left, y); y += lh;
+  }
+
+  const sepY = y + 6;
+  doc.moveTo(left, sepY).lineTo(right, sepY).lineWidth(0.7).strokeColor("#444").stroke();
+  return sepY + 12;
+}
+function drawFooter(doc) {
+  const { width, height } = doc.page;
+  doc.font("Helvetica").fontSize(9).fillColor("#666")
+    .text(`Página ${doc.page.number}`, 42, height - 36, { width: width - 84, align: "right" });
+}
+function drawTable(doc, { x = 42, y, columns, rows, rowHeight = 22, zebra = true }, onNewPage) {
+  const pageBottom = doc.page.height - 72;
+  const colX = [];
+  let acc = x;
+  for (const c of columns) { colX.push(acc); acc += c.width; }
+  const tableWidth = columns.reduce((s, c) => s + c.width, 0);
+
+  const paintHeader = (y0) => {
+    doc.save();
+    doc.rect(x, y0, tableWidth, rowHeight).fill("#f0f2f5").restore();
+    doc.lineWidth(0.7).strokeColor("#d1d5db")
+      .moveTo(x, y0 + rowHeight).lineTo(x + tableWidth, y0 + rowHeight).stroke();
+    columns.forEach((c, i) => {
+      const tx = colX[i] + (c.paddingLeft ?? 8);
+      const tw = c.width - (c.paddingLeft ?? 8) - (c.paddingRight ?? 8);
+      doc.font("Helvetica-Bold").fontSize(10).fillColor("#111827")
+        .text(c.header, tx, y0 + 6, { width: tw, ellipsis: true });
+    });
+  };
+
+  paintHeader(y);
+  let cursorY = y + rowHeight;
+
+  for (let idx = 0; idx < rows.length; idx++) {
+    const r = rows[idx];
+
+    if (cursorY + rowHeight > pageBottom) {
+      drawFooter(doc);
+      doc.addPage();
+      const newY = onNewPage?.() ?? 36;
+      paintHeader(newY);
+      cursorY = newY + rowHeight;
+    }
+
+    if (zebra && idx % 2 === 0) {
+      doc.save();
+      doc.rect(x, cursorY, tableWidth, rowHeight).fill("#fafafa").restore();
+    }
+
+    columns.forEach((c, i) => {
+      const tx = colX[i] + (c.paddingLeft ?? 8);
+      const tw = c.width - (c.paddingLeft ?? 8) - (c.paddingRight ?? 8);
+      const val = typeof c.accessor === "function" ? c.accessor(r) : r[c.accessor];
+      doc.font("Helvetica").fontSize(10).fillColor("#0f172a")
+        .text(String(val ?? ""), tx, cursorY + 6, { width: tw, ellipsis: true });
+    });
+
+    doc.lineWidth(0.5).strokeColor("#e5e7eb")
+      .moveTo(x, cursorY + rowHeight).lineTo(x + tableWidth, cursorY + rowHeight).stroke();
+
+    cursorY += rowHeight;
+  }
+
+  return cursorY;
+}
 async function gerarPdfChecklist(chkId, cab, linhas) {
   const filename = `checklist_${chkId}.pdf`;
   const filepath = path.join(STORAGE_DIR, filename);
 
   await new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ margin: 36, size: 'A4' });
+    const doc = new PDFDocument({
+      size: "A4",
+      margins: { top: 36, left: 42, right: 42, bottom: 48 },
+      bufferPages: true,
+      autoFirstPage: true,
+      compress: true
+    });
+
     const out = fs.createWriteStream(filepath);
-    out.on('finish', resolve);
-    out.on('error', reject);
+    out.on("finish", resolve);
+    out.on("error", reject);
     doc.pipe(out);
 
-    doc.fontSize(16).text('Checklist de Verificação de Veículo', { align: 'center' });
-    doc.moveDown(0.5);
-    doc.fontSize(11).text(`ID: ${cab.id}`);
-    doc.text(`Veículo: ${cab.veiculo}`);
-    doc.text(`Data: ${new Date(cab.created_at).toLocaleString('pt-PT')}`);
-    doc.text(`Responsável: ${cab.autor} ${cab.autor_apelido || ''}`.trim());
-    if (cab.observacoes) doc.text(`Observações: ${cab.observacoes}`);
-    doc.moveDown(0.6);
+    let yStart = drawHeader(doc, cab);
 
-    doc.fontSize(11).text('Cofre            Equipamento                                 Pres.  Falta  INOP');
-    doc.moveTo(36, doc.y + 2).lineTo(559, doc.y + 2).stroke();
+    const columns = [
+      { header: "Cofre",       accessor: "cofre",       width: 90 },
+      { header: "Equipamento", accessor: "equipamento", width: 230 },
+      { header: "Pres.",       accessor: r => r.presente ?? 0, width: 60, paddingLeft: 8, paddingRight: 8 },
+      { header: "Falta",       accessor: r => r.falta    ?? 0, width: 60, paddingLeft: 8, paddingRight: 8 },
+      { header: "INOP",        accessor: r => r.inop     ?? 0, width: 60, paddingLeft: 8, paddingRight: 8 },
+    ];
 
-    const fmt = (s, n) => (s.length > n ? s.slice(0, n-1) + '…' : s).padEnd(n, ' ');
-    for (const r of linhas) {
-      const linha =
-        `${fmt(r.cofre,14)}  ${fmt(r.equipamento,40)}  ` +
-        `${String(r.presente).padStart(4,' ')}  ` +
-        `${String(r.falta).padStart(5,' ')}  ` +
-        `${String(r.inop).padStart(4,' ')}`;
-      doc.fontSize(10).text(linha);
-      if (doc.y > 760) doc.addPage();
-    }
+    drawTable(
+      doc,
+      { x: 42, y: yStart, columns, rows: linhas, rowHeight: 22, zebra: true },
+      () => drawHeader(doc, cab)
+    );
 
+    drawFooter(doc);
     doc.end();
   });
 
@@ -303,10 +621,11 @@ async function gerarPdfChecklist(chkId, cab, linhas) {
     `UPDATE checklist SET pdf_path=?, status='closed', closed_at=IFNULL(closed_at, CURRENT_TIMESTAMP) WHERE id=?`,
     [filename, chkId]
   );
+
   return filepath;
 }
 
-// POST /checklists  (usa o payload do UI: { id_veiculo, itens: [{ id_cofre, id_equip, presente, falta, inop }] })
+// POST /checklists
 app.post('/checklists', requireAuth, async (req, res) => {
   const id_veiculo = Number.parseInt(req.body?.id_veiculo, 10);
   const observacoes = (req.body?.observacoes || '').toString().slice(0,500);
@@ -323,7 +642,6 @@ app.post('/checklists', requireAuth, async (req, res) => {
     );
     const chkId = ins.insertId;
 
-    // agrega possíveis duplicados por (id_local, id_equip)
     const agg = new Map();
     for (const it of itens) {
       const id_cofre = Number.parseInt(it.id_cofre, 10);
@@ -354,7 +672,6 @@ app.post('/checklists', requireAuth, async (req, res) => {
     await db.query(`UPDATE checklist SET closed_at = CURRENT_TIMESTAMP WHERE id=?`, [chkId]);
     await db.commit();
 
-    // Buscar dados para PDF e gerar/guardar ficheiro
     const [[cab]] = await db.query(
       `SELECT c.id, c.created_at, c.closed_at, c.observacoes,
               v.codigo AS veiculo, b.nome AS autor, b.apelido AS autor_apelido
@@ -437,7 +754,7 @@ app.get('/checklists/:id', requireAuth, async (req, res) => {
   res.json({ ...cab, itens });
 });
 
-// GET /checklists/:id/pdf (serve do disco; se faltar, regenera)
+// GET /checklists/:id/pdf
 app.get('/checklists/:id/pdf', requireAuth, async (req, res) => {
   const id = Number.parseInt(req.params.id,10);
   if (!Number.isInteger(id)) return res.status(400).json({ ok:false, error:'invalid_id' });
@@ -503,36 +820,44 @@ app.post('/login', loginLimiter, async (req, res) => {
 app.get('/me', requireAuth, (req, res) => { res.json({ ok: true, user: req.user }); });
 app.post('/logout', (_req, res) => { clearAuthCookie(res); res.json({ ok: true }); });
 
-// ========================= CREATE ACCOUNT =========================
-app.post('/create', async (req, res) => {
-  const { nome = '', sobrenome = '', username = '', password = '', graduacao = null, piquete = null, funcoes = [] } = req.body || {};
-  if (!nome.trim() || !sobrenome.trim() || !username.trim() || !password.trim()) return res.status(400).json({ ok: false, error: 'missing_fields' });
-  if (password.length < 6) return res.status(400).json({ ok:false, error:'weak_password' });
-  const apelido = sobrenome.trim();
-  const nome_completo = `${nome.trim()} ${apelido}`;
-  const password_hash = await bcrypt.hash(password, 10);
-  await db.beginTransaction();
+// ========================= REPOSIÇÃO (ACUMULADO) =========================
+app.get('/reposicao', requireAuth, async (req, res) => {
   try {
-    const [userResult] = await db.query(
-      `INSERT INTO bombeiro (nome, apelido, nome_completo, graduacao, piquete, username, password_hash) VALUES (?,?,?,?,?,?,?)`,
-      [nome.trim(), apelido, nome_completo, graduacao, piquete, username.trim(), password_hash]
-    );
-    const bombeiroId = userResult.insertId;
-    if (Array.isArray(funcoes) && funcoes.length) {
-      for (const f of funcoes) await db.query(`INSERT IGNORE INTO funcao (nome) VALUES (?)`, [f]);
-      const [rows] = await db.query(`SELECT id, nome FROM funcao WHERE nome IN (${funcoes.map(()=>'?').join(',')})`, funcoes);
-      if (rows.length) {
-        const values = rows.map(r => [bombeiroId, r.id]);
-        await db.query(`INSERT INTO bombeiro_funcao (id_bombeiro, id_funcao) VALUES ?`, [values]);
-      }
-    }
-    await db.commit();
-    return res.json({ ok: true, id: bombeiroId });
+    const idV = req.query.id_veiculo ? Number.parseInt(req.query.id_veiculo, 10) : null;
+    const where = ['c.status = \'closed\''];
+    const params = [];
+
+    if (idV) { where.push('c.id_veiculo = ?'); params.push(idV); }
+
+    const sql = `
+      SELECT 
+        v.id_veiculo,
+        v.codigo               AS veiculo,
+        cof.id_cofre,
+        cof.nome               AS cofre,
+        e.id_equip,
+        e.nome                 AS equipamento,
+        CAST(SUM(chki.falta) AS UNSIGNED) AS falta,
+        CAST(SUM(chki.inop)  AS UNSIGNED) AS inop,
+        MAX(c.created_at)     AS last_seen
+      FROM checklist_item chki
+      JOIN checklist   c   ON c.id = chki.id_checklist
+      JOIN localizacao l   ON l.id_local = chki.id_local AND l.tipo='COFRE'
+      JOIN veiculo     v   ON v.id_veiculo = c.id_veiculo
+      JOIN cofre       cof ON cof.id_cofre = l.id_cofre
+      JOIN equipamento e   ON e.id_equip = chki.id_equip
+      WHERE ${where.join(' AND ')}
+        AND (chki.falta > 0 OR chki.inop > 0)
+      GROUP BY v.id_veiculo, cof.id_cofre, e.id_equip
+      HAVING (SUM(chki.falta) > 0 OR SUM(chki.inop) > 0)
+      ORDER BY v.codigo, cof.nome, e.nome
+    `;
+
+    const [rows] = await db.query(sql, params);
+    return res.json(rows);
   } catch (e) {
-    await db.rollback().catch(()=>{});
-    if (e?.code === 'ER_DUP_ENTRY') return res.status(409).json({ ok: false, error: 'username_already_exists' });
-    console.error('CREATE ERROR:', e);
-    return res.status(500).json({ ok: false, error: 'server_error' });
+    console.error('ERRO /reposicao (acumulado):', e);
+    return res.status(500).json({ ok:false, error: e.message || 'server_error' });
   }
 });
 

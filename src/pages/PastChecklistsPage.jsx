@@ -1,5 +1,7 @@
+// src/pages/PastChecklistsPage.jsx
 import { useEffect, useState } from "react";
 import { API_BASE } from "../lib/api";
+import "./pastchecklistpage.css";
 
 export default function PastChecklistsPage({ onBack }) {
   const [veiculos, setVeiculos] = useState([]);
@@ -12,7 +14,7 @@ export default function PastChecklistsPage({ onBack }) {
 
   useEffect(() => {
     fetch(`${API_BASE}/veiculo`)
-      .then(r => r.json())
+      .then((r) => r.json())
       .then(setVeiculos)
       .catch(() => {});
   }, []);
@@ -25,6 +27,7 @@ export default function PastChecklistsPage({ onBack }) {
       if (from) params.set("from", from);
       if (to) params.set("to", to);
       if (idVeiculo) params.set("id_veiculo", idVeiculo);
+
       const r = await fetch(`${API_BASE}/checklists?${params.toString()}`, {
         credentials: "include",
       });
@@ -62,11 +65,12 @@ export default function PastChecklistsPage({ onBack }) {
   }
 
   return (
-    <div className="page">
+    <div className="past-page">
       <div className="toolbar">
         <button onClick={onBack}>Voltar</button>
-        <h2 style={{ marginLeft: 8 }}>Listas Anteriores</h2>
-        <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+        <h2>Listas Anteriores</h2>
+
+        <div className="filters">
           <input
             type="date"
             value={from}
@@ -82,6 +86,7 @@ export default function PastChecklistsPage({ onBack }) {
           <select
             value={idVeiculo}
             onChange={(e) => setIdVeiculo(e.target.value)}
+            title="Veículo"
           >
             <option value="">Todos os veículos</option>
             {veiculos.map((v) => (
@@ -120,7 +125,7 @@ export default function PastChecklistsPage({ onBack }) {
                 </td>
                 <td>{r.veiculo}</td>
                 <td>{r.autor}</td>
-                <td style={{ display: "flex", gap: 8 }}>
+                <td>
                   <button onClick={() => verDetalhe(r.id)}>Detalhe</button>
                   <button onClick={() => abrirPDF(r.id)}>Abrir PDF</button>
                 </td>

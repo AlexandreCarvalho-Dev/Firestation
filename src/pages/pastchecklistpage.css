@@ -1,0 +1,309 @@
+/* =========================
+   PastChecklistsPage — SCOPED & MOBILE-FIRST
+   ========================= */
+
+.past-page {
+  /* Viewport estável em mobile (evita cortes no topo) */
+  min-height: 100svh;
+  min-height: 100dvh;
+
+  max-width: 100%;
+  overflow-x: hidden;          /* nunca scroll horizontal no page root */
+  /* não forçar overflow-y aqui para não quebrar sticky */
+  background: #0f1115;         /* ajusta se tiveres tema global */
+  padding: 12px;
+
+  /* Design tokens locais (não vazam para fora) */
+  --panel: #ffffff;
+  --text: #0f172a;
+  --muted: #6b7280;
+  --muted-strong: #475569;
+  --accent: #3b82f6;
+  --accent-hover: #2563eb;
+  --border: #e5e7eb;
+  --danger: #ef4444;
+  --radius: 14px;
+  --shadow: 0 8px 24px rgba(0,0,0,.08);
+  --tap: 44px;
+
+  /* Altura da toolbar usada para offset do thead sticky */
+  --toolbar-h: 64px; /* mobile */
+}
+
+@media (min-width: 768px) {
+  .past-page { --toolbar-h: 56px; }
+}
+
+/* evitar que filhos flex alarguem e provoquem overflow */
+.past-page * { box-sizing: border-box; min-width: 0; }
+
+/* ===== Toolbar (sticky) ===== */
+.past-page .toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 50;                 /* acima de qualquer conteúdo */
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  border-radius: var(--radius);
+  background: #ffffff;         /* sólido: evita flicker com blur em iOS */
+  border: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  box-shadow: var(--shadow);
+}
+
+/* Título */
+.past-page .toolbar > h2 {
+  flex: 1 1 100%;
+  margin: 0;
+  font-size: 1.1rem;
+  color: var(--muted-strong);
+}
+
+/* Botão Voltar */
+.past-page .toolbar > button {
+  flex: 1 1 100%;
+  max-width: 100%;
+  height: var(--tap);
+  border: none;
+  border-radius: 12px;
+  font-weight: 700;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+}
+
+/* ===== Filtros ===== */
+.past-page .toolbar .filters {
+  margin-left: 0;
+  display: flex;
+  flex-wrap: wrap;  /* quebra em linhas no mobile */
+  gap: 8px;
+  width: 100%;
+}
+
+.past-page .toolbar .filters > * {
+  flex: 1 1 100%;
+  max-width: 100%;
+  height: var(--tap);
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: #fff;
+  color: var(--text);
+  padding: 0 12px;
+  font: inherit;
+  outline: none;
+}
+
+.past-page .toolbar .filters > button {
+  border-color: transparent;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+}
+.past-page .toolbar .filters > button:not(:disabled):active { transform: translateY(1px); }
+.past-page .toolbar .filters > button:disabled { opacity: .6; cursor: not-allowed; }
+
+/* ===== Mensagens ===== */
+.past-page .erro {
+  margin: 12px 0;
+  padding: 12px 14px;
+  border: 1px solid #fecaca;
+  background: #fee2e2;
+  color: #7f1d1d;
+  border-radius: 12px;
+}
+.past-page .muted { color: var(--muted); }
+
+/* ===== Painel ===== */
+.past-page .panel {
+  margin-top: 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  /* importante: não usar overflow-y aqui para não quebrar sticky do thead */
+  overflow-x: hidden;  /* só bloqueia scroll lateral */
+}
+
+/* ===== Tabela (base desktop) ===== */
+.past-page .tabela {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.past-page .tabela th,
+.past-page .tabela td {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+  word-wrap: break-word;
+  color: var(--text);
+}
+
+/* Cabeçalho sticky abaixo da toolbar */
+.past-page .tabela thead th {
+  text-align: left;
+  font-size: .9rem;
+  color: var(--muted-strong);
+  background: #f8fafc;
+  position: sticky;
+  top: var(--toolbar-h);    /* cola imediatamente abaixo da toolbar */
+  z-index: 40;              /* abaixo da toolbar, acima do corpo */
+}
+
+/* Botões na tabela */
+.past-page .tabela td button {
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: #f3f4f6;
+  color: var(--text);
+  cursor: pointer;
+  font-weight: 600;
+}
+.past-page .tabela td button + button { margin-left: 8px; }
+.past-page .tabela td button:nth-child(2) {
+  background: var(--accent);
+  border-color: transparent;
+  color: #fff;
+}
+
+/* ===== Mobile: tabela -> cards, sem overflow ===== */
+@media (max-width: 767px) {
+  .past-page { padding: 10px; }
+
+  .past-page .tabela { display: block; width: 100%; }
+  .past-page .tabela thead { display: none; }
+
+  .past-page .tabela tbody {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 12px;
+    padding: 10px;
+  }
+
+  .past-page .tabela tr {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: #fff;
+    box-shadow: var(--shadow);
+    scroll-margin-top: calc(var(--toolbar-h) + 8px);
+  }
+
+  .past-page .tabela td {
+    display: grid;
+    grid-template-columns: 120px 1fr; /* label + valor */
+    gap: 8px;
+    padding: 4px 0;
+    border: none;
+  }
+
+  /* Rótulos */
+  .past-page .tabela td:nth-child(1)::before { content: "ID"; color: var(--muted); }
+  .past-page .tabela td:nth-child(2)::before { content: "Data"; color: var(--muted); }
+  .past-page .tabela td:nth-child(3)::before { content: "Veículo"; color: var(--muted); }
+  .past-page .tabela td:nth-child(4)::before { content: "Responsável"; color: var(--muted); }
+  .past-page .tabela td:nth-child(5)::before { content: "Ações"; color: var(--muted); }
+
+  .past-page .tabela td:last-child { grid-template-columns: 1fr; }
+  .past-page .tabela td button { width: 100%; height: 40px; }
+
+  /* Toolbar: título abaixo do botão Voltar para poupar espaço */
+  .past-page .toolbar > h2 { order: 3; }
+}
+
+/* ===== >=768px: filtros inline quando há espaço ===== */
+@media (min-width: 768px) {
+  .past-page { padding: 16px; }
+
+  .past-page .toolbar .filters {
+    margin-left: auto;  /* empurra filtros à direita */
+    width: auto;
+    flex-wrap: nowrap;
+  }
+  .past-page .toolbar .filters > * { flex: 0 0 auto; width: auto; }
+  .past-page .toolbar > button { flex: 0 0 auto; width: auto; }
+}
+
+/* ===== Acessibilidade ===== */
+.past-page button:focus-visible,
+.past-page input:focus-visible,
+.past-page select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ===== Contraste consistente no painel ===== */
+.past-page .panel,
+.past-page .panel * { color: var(--text); }
+.past-page .tabela thead th { color: var(--muted-strong); }
+.past-page ::placeholder { color: #9ca3af; opacity: 1; }
+
+/* ===== Salvaguardas anti-recorte de sticky ===== */
+/* Se algum ancestral tiver overflow-y, o sticky pode falhar.
+   Aqui garantimos que estes containers não o aplicam inadvertidamente. */
+.past-page,
+.past-page .panel {
+  overflow-y: visible;
+  overflow-x: hidden;
+}
+
+/* Ao ancorar por hash/scrollIntoView, respeita a altura da toolbar */
+.past-page .panel:first-of-type {
+  scroll-margin-top: calc(var(--toolbar-h) + 8px);
+}
+
+/* ============= iOS SAFE AREA + sticky real ============= */
+.past-page {
+  /* sem padding no topo — evita a faixa escura acima da toolbar */
+  padding: 0 12px 12px;
+
+  /* evita “rubber-band” mostrar o fundo preto em overscroll */
+  overscroll-behavior-y: contain;
+
+  /* variável com a safe area do iOS (0 noutras plataformas) */
+  --safe-top: env(safe-area-inset-top, 0px);
+}
+
+/* toolbar colada ao topo real (inclui notch) */
+.past-page .toolbar {
+  position: sticky;
+  top: var(--safe-top);
+  z-index: 50;
+  /* borda superior reta para colar ao topo; cantos só em baixo */
+  border-radius: 0 0 var(--radius) var(--radius);
+  background: #ffffff;     /* sólido para não “piscar” em iOS */
+  backdrop-filter: none;
+  margin-top: 0;
+}
+
+/* tira a margem própria do título para não “empurrar” a toolbar */
+.past-page .toolbar > h2 { margin-top: 0; }
+
+/* header da tabela fica exatamente por baixo da toolbar sticky */
+.past-page .tabela thead th {
+  position: sticky;
+  top: calc(var(--safe-top) + var(--toolbar-h));
+  z-index: 40;
+}
+
+/* opcional: barra de preenchimento da área do notch (evita ver o fundo) */
+.past-page::before {
+  content: "";
+  position: sticky;
+  top: 0;
+  height: var(--safe-top);
+  display: block;
+  background: #ffffff;  /* mesmo fundo da toolbar */
+  z-index: 49;          /* logo abaixo da toolbar */
+}

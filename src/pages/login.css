@@ -7,16 +7,6 @@
     margin: auto auto 15% auto;
 }
 
-html, body {
-    height: 100%;
-    margin: 0;
-    padding: 0;
-    font-family: Arial, sans-serif;
-    background-image: url('../assets/Login-background.jpg');
-    background-size: cover;
-    background-position: center;
-}
-
 .header img {
     width: 30%;
     height: auto;

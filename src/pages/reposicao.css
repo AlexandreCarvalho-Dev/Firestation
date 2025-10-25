@@ -1,0 +1,76 @@
+/* === Layout geral === */
+.reposicao-wrap {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 16px;
+  overflow-x: hidden;
+}
+
+/* Header / botões iguais aos anteriores... */
+
+/* === Tabela: SEM transparências e SEM scroll horizontal === */
+.table-wrap.no-hscroll {
+  overflow-x: hidden;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #ffffff;               /* FUNDO SÓLIDO */
+  box-shadow: 0 6px 24px rgba(0,0,0,.10);
+}
+
+.repo-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;               /* fixa layout e evita “empurrar” */
+  background: #ffffff;               /* FUNDO SÓLIDO */
+  font-size: 0.95rem;
+}
+
+/* Cabeçalho fixo e legível */
+.repo-table thead th {
+  position: sticky;
+  top: 0;
+  background: #f1f5f9;               /* sem alpha */
+  color: #111827;
+  text-align: left;
+  padding: 10px;
+  border-bottom: 1px solid #e5e7eb;
+  white-space: nowrap;
+}
+
+/* Células com fundo sólido + zebra clara */
+.repo-table tbody td {
+  padding: 10px;
+  vertical-align: top;
+  border-bottom: 1px solid #eef2f7;
+  background: #ffffff;               /* FUNDO SÓLIDO */
+  color: #0f172a;
+  /* Quebra de texto mais natural */
+  white-space: normal;
+  word-break: normal;
+  overflow-wrap: break-word;         /* em vez de anywhere */
+  hyphens: auto;                     /* deixa o browser hifenizar */
+}
+
+/* Zebra (sem transparência) */
+.repo-table tbody tr:nth-child(odd) td {
+  background: #fafbfc;
+}
+
+/* Colunas e destaques numéricos */
+.col-veic { width: 20%; }
+.col-cofre { width: 22%; }
+.col-equip { width: auto; }
+.col-num   { width: 72px; text-align: right; }
+
+.repo-table td.neg  { color: #dc2626; font-weight: 700; }
+.repo-table td.warn { color: #b45309; font-weight: 700; }
+
+.repo-table .empty { text-align: center; color: #6b7280; }
+
+/* Responsivo */
+@media (max-width: 720px) {
+  .repo-table { font-size: 0.92rem; }
+  .repo-table thead th, .repo-table tbody td { padding: 8px; }
+  .col-num { width: 64px; }
+}
