@@ -4,12 +4,12 @@ import { API_BASE } from '../lib/api';
 import './vehicle.css';
 
 export default function ChecklistPage({ idVeiculo, codigoVeiculo, onBack }) {
-  const [rows, setRows] = useState([]);          // linhas vindas da API (por cofre)
+  const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState('');
 
-  // Estado por (cofre:id_equip) → chave `${id_cofre}:${id_equip}`
-  // Guardamos: baseQty (da API), falta, inop
+  // Estado por (cofre:id_equip)
+  // Guardamos: baseQty (da API), falta (int), manutencao (int)
   const [counts, setCounts] = useState({});
   const keyFor = (r) => `${r.id_cofre}:${r.id_equip}`;
 
@@ -31,7 +31,7 @@ export default function ChecklistPage({ idVeiculo, codigoVeiculo, onBack }) {
         const init = {};
         for (const row of data) {
           const base = Number(row.qty ?? 0);
-          init[keyFor(row)] = { baseQty: base, falta: 0, inop: 0 };
+          init[keyFor(row)] = { baseQty: base, falta: 0, manutencao: 0 };
         }
         setCounts(init);
       } catch (e) {
@@ -55,21 +55,21 @@ export default function ChecklistPage({ idVeiculo, codigoVeiculo, onBack }) {
   function patchLinha(r, fn) {
     const k = keyFor(r);
     setCounts(prev => {
-      const cur = prev[k] || { baseQty: Number(r.qty ?? 0), falta: 0, inop: 0 };
+      const cur = prev[k] || { baseQty: Number(r.qty ?? 0), falta: 0, manutencao: 0 };
       const next = fn({ ...cur });
-      // clamp para garantir 0 <= falta+inop <= baseQty
-      const totalOut = Math.min(next.baseQty, Math.max(0, next.falta + next.inop));
-      const excesso = totalOut - (next.falta + next.inop);
-      if (excesso !== 0) {
-        // se por alguma razão passou do limite, ajusta INOP por último
-        if (excesso < 0) {
-          // reduzir
-          const reduzir = -excesso;
-          const tiraInop = Math.min(reduzir, next.inop);
-          next.inop -= tiraInop;
-          const faltaRest = reduzir - tiraInop;
-          if (faltaRest > 0) next.falta = Math.max(0, next.falta - faltaRest);
-        }
+
+      // clamps: 0 ≤ falta ≤ base; 0 ≤ manutencao; e (falta + manutencao) ≤ base
+      next.falta = Math.max(0, Math.min(next.falta, next.baseQty));
+      next.manutencao = Math.max(0, next.manutencao | 0);
+
+      const totalOut = next.falta + next.manutencao;
+      if (totalOut > next.baseQty) {
+        // reduzir preferência em manutencao
+        const excesso = totalOut - next.baseQty;
+        const tiraMan = Math.min(excesso, next.manutencao);
+        next.manutencao -= tiraMan;
+        const resto = excesso - tiraMan;
+        if (resto > 0) next.falta = Math.max(0, next.falta - resto);
       }
       return { ...prev, [k]: next };
     });
@@ -78,11 +78,12 @@ export default function ChecklistPage({ idVeiculo, codigoVeiculo, onBack }) {
   const getPresente = (k) => {
     const c = counts[k];
     if (!c) return 0;
-    const p = c.baseQty - c.falta - c.inop;
+    // Agora: Presente = base - Falta - Manutenção
+    const p = c.baseQty - c.falta - c.manutencao;
     return Math.max(0, Math.min(c.baseQty, p));
   };
 
-  // Payload novo: { id_cofre, id_equip, presente, falta, inop }
+  // Payload: { id_cofre, id_equip, presente, falta, manutencao }
   function toItemsPayload() {
     const itens = [];
     for (const r of rows) {
@@ -94,7 +95,7 @@ export default function ChecklistPage({ idVeiculo, codigoVeiculo, onBack }) {
         id_equip: r.id_equip,
         presente: getPresente(k),
         falta: c.falta,
-        inop: c.inop,
+        manutencao: c.manutencao,
       });
     }
     return itens;
@@ -139,12 +140,12 @@ export default function ChecklistPage({ idVeiculo, codigoVeiculo, onBack }) {
 
   return (
     <div className="veh-page">
-      {/* Header fixo */}
       <div className="veh-header">
         <button className="icon" onClick={onBack} aria-label="Voltar">←</button>
         <h1>{codigoVeiculo || `Veículo #${idVeiculo}`}</h1>
         <button
           className="btn-primary save-btn"
+          id='save'
           onClick={handleGuardarPDF}
           disabled={rows.length === 0 || loading}
           title="Guardar e gerar PDF"
@@ -164,27 +165,29 @@ export default function ChecklistPage({ idVeiculo, codigoVeiculo, onBack }) {
               <col className="col-material" />
               <col className="col-presente" />
               <col className="col-falta" />
-              <col className="col-inop" />
+              <col className="col-manut" />
             </colgroup>
             <thead>
               <tr>
                 <th>Material</th>
                 <th>Presente</th>
                 <th>Falta</th>
-                <th>INOP</th>
+                <th>Manutenção</th>
               </tr>
             </thead>
             <tbody>
               {linhas.map(r => {
                 const k = keyFor(r);
-                const c = counts[k] || { baseQty: Number(r.qty ?? 0), falta: 0, inop: 0 };
+                const c = counts[k] || { baseQty: Number(r.qty ?? 0), falta: 0, manutencao: 0 };
                 const presente = getPresente(k);
 
-                const inc = (tipo) => patchLinha(r, cur => {
-                  if (cur.falta + cur.inop >= cur.baseQty) return cur; // já não há para tirar do presente
-                  return { ...cur, [tipo]: cur[tipo] + 1 };
-                });
-                const dec = (tipo) => patchLinha(r, cur => ({ ...cur, [tipo]: Math.max(0, cur[tipo] - 1) }));
+                const incFalta = () => patchLinha(r, cur => ({ ...cur, falta: Math.min(cur.falta + 1, cur.baseQty) }));
+                const decFalta = () => patchLinha(r, cur => ({ ...cur, falta: Math.max(0, cur.falta - 1) }));
+                const incMan   = () => patchLinha(r, cur => ({ ...cur, manutencao: cur.manutencao + 1 }));
+                const decMan   = () => patchLinha(r, cur => ({ ...cur, manutencao: Math.max(0, cur.manutencao - 1) }));
+
+                const disableIncFalta = c.falta + c.manutencao >= c.baseQty;
+                const disableIncMan   = c.falta + c.manutencao >= c.baseQty;
 
                 return (
                   <tr key={k}>
@@ -195,46 +198,23 @@ export default function ChecklistPage({ idVeiculo, codigoVeiculo, onBack }) {
                     {/* Presente (read-only) */}
                     <td className="num">
                       <input className="qty-input readonly" readOnly value={presente} />
-                      <span className="muted small">/ {c.baseQty}</span>
                     </td>
 
                     {/* Falta */}
                     <td className="num">
                       <div className="stepper">
-                        <button
-                          type="button"
-                          className="step-btn"
-                          onClick={() => dec('falta')}
-                          aria-label="Diminuir falta"
-                        >−</button>
+                        <button type="button" className="step-btn" onClick={decFalta} aria-label="Diminuir falta">−</button>
                         <span className="step-val">{c.falta}</span>
-                        <button
-                          type="button"
-                          className="step-btn"
-                          onClick={() => inc('falta')}
-                          aria-label="Aumentar falta"
-                          disabled={c.falta + c.inop >= c.baseQty}
-                        >+</button>
+                        <button type="button" className="step-btn" onClick={incFalta} aria-label="Aumentar falta" disabled={disableIncFalta}>+</button>
                       </div>
                     </td>
 
-                    {/* INOP */}
+                    {/* Manutenção */}
                     <td className="num">
                       <div className="stepper">
-                        <button
-                          type="button"
-                          className="step-btn"
-                          onClick={() => dec('inop')}
-                          aria-label="Diminuir INOP"
-                        >−</button>
-                        <span className="step-val">{c.inop}</span>
-                        <button
-                          type="button"
-                          className="step-btn"
-                          onClick={() => inc('inop')}
-                          aria-label="Aumentar INOP"
-                          disabled={c.falta + c.inop >= c.baseQty}
-                        >+</button>
+                        <button type="button" className="step-btn" onClick={decMan} aria-label="Diminuir manutenção">−</button>
+                        <span className="step-val">{c.manutencao}</span>
+                        <button type="button" className="step-btn" onClick={incMan} aria-label="Aumentar manutenção" disabled={disableIncMan}>+</button>
                       </div>
                     </td>
                   </tr>

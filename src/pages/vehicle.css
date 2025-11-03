@@ -1,4 +1,4 @@
-/* Página centrada e estreita */
+/* ===== Página centrada ===== */
 .veh-page {
   padding: 8px;
   background: #fff;
@@ -7,37 +7,40 @@
   max-width: 420px;
   margin: 0 auto;
   overflow-x: hidden;
+  box-sizing: border-box;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
 }
 
-/* Header compacto e fixo */
+/* ===== Header ===== */
 .veh-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   margin: 0 0 10px 0;
-
   position: sticky;
   top: 0;
   z-index: 100;
   background: #fff;
   padding: calc(6px + env(safe-area-inset-top, 0px)) 8px 6px 8px;
-  border-bottom: 1px solid #e6e6e6;
+  border-bottom: 1px solid #ececec;
 }
 
 .veh-header h1 {
   margin: 0;
   font-size: 16px;
   text-align: center;
-  flex: 1; /* título centrado entre voltar e botão salvar */
+  flex: 1;
+  font-weight: 700;
+  letter-spacing: .2px;
 }
 
-/* Botão “Guardar e PDF” no lugar da casa */
+/* Botão Guardar */
 .save-btn {
   font-size: 12px;
   padding: 6px 10px;
-  border-radius: 6px;
-  background: #1b74e4;
+  border-radius: 8px;
+  background: #e41e1b;
   color: #fff;
   border: none;
   white-space: nowrap;
@@ -48,13 +51,13 @@
   cursor: not-allowed;
 }
 
-/* Ícone voltar à esquerda */
+/* Botão voltar */
 .icon {
-  background: #f0f0f0;
-  border: 1px solid #ccc;
-  border-radius: 6px;
-  width: 26px;
-  height: 26px;
+  background: #f5f5f5;
+  border: 1px solid #e2e2e2;
+  border-radius: 8px;
+  width: 28px;
+  height: 28px;
   display: grid;
   place-items: center;
   cursor: pointer;
@@ -63,75 +66,115 @@
 }
 .icon:active { transform: scale(0.96); }
 
-/* Secções por cofre */
+/* ===== Cofres ===== */
 .cofre {
   margin-top: 12px;
-  border: 1px solid #d0d0d0;
-  border-radius: 8px;
+  border-radius: 10px;
   overflow: hidden;
+  box-shadow: 0 0 0 1px #eee;
 }
 .cofre h3 {
   margin: 0;
-  padding: 6px;
+  padding: 8px;
   text-align: center;
-  background: #f7f7f7;
-  border-bottom: 1px solid #e6e6e6;
+  background: #fafafa;
+  border-bottom: 1px solid #f0f0f0;
   font-size: 14px;
+  font-weight: 700;
 }
 
-/* Tabela */
+/* ===== Tabela ===== */
 .inv {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   font-size: 12px;
   table-layout: fixed;
 }
-.inv th, .inv td {
-  border-top: 1px solid #e6e6e6;
-  padding: 4px;
-  word-wrap: break-word;
-}
+
+/* Colunas ajustadas */
+.col-material { width: 42%; }   /* mais pequena */
+.col-presente { width: 18%; }
+.col-falta    { width: 20%; }
+.col-manut    { width: 20%; }
+
 .inv thead th {
-  background: #fafafa;
-  font-weight: 600;
+  background: #fcfcfc;
+  font-weight: 700;
   text-align: center;
+  padding: 6px;
+  border-bottom: 1px solid #f0f0f0;
 }
 
-.col-material { width: 44%; }
-.col-qty      { width: 16%; }
-.col-estado   { width: 24%; }
-.col-obs      { width: 16%; }
-
-.inv tbody td:first-child { text-align: left; }
+.inv tbody tr:nth-child(odd) {
+  background: #fdfdfd;
+}
+.inv td, .inv th {
+  padding: 6px;
+  vertical-align: middle;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.inv tbody td:first-child {
+  text-align: left;
+  white-space: normal;
+  line-height: 1.25;
+}
 .inv .num { text-align: center; white-space: nowrap; }
 
-/* Inputs */
+/* ===== Inputs ===== */
 .qty-input {
-  width: 48px;
+  width: 100%;
+  max-width: 50px;
   height: 26px;
+  box-sizing: border-box;
   text-align: center;
   font-size: 13px;
   padding: 2px;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-  appearance: textfield;
+  border: 1px solid #d9d9d9;
+  border-radius: 6px;
+  background: #f7f7f7;
 }
-.qty-input::-webkit-outer-spin-button,
-.qty-input::-webkit-inner-spin-button {
-  -webkit-appearance: none;
-  margin: 0;
+.qty-input.readonly {
+  background: #f2f2f2;
+  border: 1px solid #dcdcdc;
 }
 
-.inv input[type="text"] {
+/* ===== Steppers ===== */
+.stepper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;             /* mais espaço entre + e – */
   width: 100%;
-  height: 26px;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-  padding: 0 6px;
-  font-size: 12px;
 }
 
-/* Observações gerais */
+.step-btn {
+  border: none;          /* sem borda */
+  border-radius: 6px;
+  min-width: 26px;
+  height: 26px;
+  padding: 0;
+  background: transparent;
+  font-size: 18px;
+  font-weight: bold;
+  color: #111;
+  transition: background 0.2s;
+}
+.step-btn:hover:not(:disabled) {
+  background: #efefef;   /* leve highlight */
+}
+.step-btn:disabled { opacity: 0.4; }
+.step-btn:active { transform: scale(0.95); }
+
+.step-val {
+  min-width: 14px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ===== Observações gerais ===== */
 .obs-box {
   margin: 12px 0 24px 0;
   display: grid;
@@ -139,22 +182,30 @@
 }
 .obs-box textarea {
   width: 100%;
-  border: 1px solid #ccc;
-  border-radius: 6px;
+  border: 1px solid #d9d9d9;
+  border-radius: 10px;
   padding: 8px;
   font-size: 13px;
   resize: vertical;
 }
 
-/* Mensagens */
+/* ===== Mensagens ===== */
 .muted { opacity: 0.7; padding: 8px 0; text-align: center; font-size: 12px; }
 .erro  { color: #b00020; font-weight: 600; margin: 8px 0; font-size: 12px; }
 
-/* Ajustes em ecrãs um pouco maiores */
+/* ===== Responsivo ===== */
 @media (min-width: 480px) {
   .veh-page { max-width: 520px; }
   .inv { font-size: 13px; }
-  .qty-input { width: 56px; height: 28px; font-size: 13px; }
+  .qty-input { max-width: 54px; height: 28px; font-size: 13px; }
   .veh-header h1 { font-size: 18px; }
   .save-btn { font-size: 13px; padding: 8px 12px; }
 }
+
+.veh-page button:not(#save),
+.veh-page input,
+.veh-page textarea {
+  font: inherit;
+  color: inherit;
+}
+.veh-page button { cursor: pointer; }

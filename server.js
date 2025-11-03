@@ -15,16 +15,19 @@ import { fileURLToPath } from "url";
 // ========================= App & Config =========================
 const app = express();
 
+import 'dotenv/config';
+
 const {
-  NODE_ENV = "development",
-  CLIENT_ORIGINS = "http://localhost:5173",
-  JWT_SECRET = "muda-isto",
-  DB_HOST = "localhost",
-  DB_USER = "root",
-  DB_PASS = "12345678",
-  DB_NAME = "bombeiros",
-  PORT = 3001
+  NODE_ENV,
+  DB_HOST,
+  DB_USER,
+  DB_PASS,
+  DB_NAME,
+  PORT,
+  CLIENT_ORIGINS,
+  JWT_SECRET
 } = process.env;
+
 
 const IS_PROD = NODE_ENV === "production";
 
@@ -34,14 +37,14 @@ const __dirname = path.dirname(__filename);
 const STORAGE_DIR = path.join(__dirname, "storage", "checklists");
 await fsp.mkdir(STORAGE_DIR, { recursive: true });
 
-// ========================= CORS =========================. http://172.20.10.3:5173
+// ========================= CORS ========================= 192.168.1.86
 const allowlist = CLIENT_ORIGINS.split(",").map(s => s.trim()).filter(Boolean);
 function isLanDevOrigin(origin) {
   if (IS_PROD || !origin) return false;
   try {
     const u = new URL(origin);
     return u.protocol === "http:" &&
-           /^172\.20\.10\.\d{1,3}$/.test(u.hostname) &&
+           /^192\.168\.1\.\d{1,3}$/.test(u.hostname) &&
            (u.port === "5173" || u.port === "");
   } catch { return false; }
 }
@@ -102,7 +105,7 @@ async function ensureSaldoRow(id_local, id_equip) {
   );
 }
 
-// ===== Helpers Secção (NOVOS) =====
+// ===== Helpers Secção =====
 async function ensureArmazemLocalBySecaoId(id_secao) {
   const [[ex]] = await db.query(
     `SELECT id_local FROM localizacao WHERE tipo='SECAO' AND id_secao=? LIMIT 1`,
@@ -302,7 +305,6 @@ app.post('/veiculo/:id/cofre/:cofreId/saida', async (req, res) => {
 });
 
 // ========================= Secção (Material) =========================
-// GETs existentes
 app.get("/secao/:nome/catalogo", async (req, res) => {
   try {
     const [rows] = await db.query(
@@ -372,118 +374,6 @@ app.get("/secao/:nome/inventario", async (req, res) => {
 
     res.json({ totais, breakdown });
   } catch (e) { res.status(500).json({ error:e.message }); }
-});
-
-// ===== NOVAS rotas Secção =====
-app.post('/secao/:nome/equipamento', requireAuth, async (req, res) => {
-  const secaoNome = req.params.nome;
-  const { nome = '', qty, unidade = 'un' } = req.body || {};
-  const qtd = Number.parseInt(qty, 10);
-
-  if (!nome.trim() || !Number.isInteger(qtd) || qtd <= 0) {
-    return res.status(400).json({ ok:false, error:'invalid_payload' });
-  }
-
-  try {
-    const id_secao = await getSecaoIdByNome(secaoNome);
-    if (!id_secao) return res.status(404).json({ ok:false, error:'secao_not_found' });
-
-    await db.beginTransaction();
-
-    const id_local = await ensureArmazemLocalBySecaoId(id_secao);
-    const id_equip = await ensureEquipamentoOnSecao(id_secao, nome.trim(), unidade);
-    if (!id_equip) throw new Error('equip_insert_failed');
-
-    await ensureSaldoRow(id_local, id_equip);
-    await db.query(
-      `UPDATE inventario_saldo SET qty = qty + ? WHERE id_local=? AND id_equip=?`,
-      [qtd, id_local, id_equip]
-    );
-
-    await db.commit();
-    return res.json({ ok:true, id_equip, added:qtd });
-  } catch (e) {
-    await db.rollback().catch(()=>{});
-    console.error('POST /secao/:nome/equipamento', e);
-    return res.status(400).json({ ok:false, error: e.message || 'server_error' });
-  }
-});
-
-app.post('/secao/:nome/entrada', requireAuth, async (req, res) => {
-  const secaoNome = req.params.nome;
-  const id_equip = Number.parseInt(req.body?.id_equip, 10);
-  const qty      = Number.parseInt(req.body?.qty, 10);
-
-  if (![id_equip, qty].every(Number.isInteger) || qty <= 0) {
-    return res.status(400).json({ ok:false, error:'invalid_payload' });
-  }
-
-  try {
-    const id_secao = await getSecaoIdByNome(secaoNome);
-    if (!id_secao) return res.status(404).json({ ok:false, error:'secao_not_found' });
-
-    const [[eq]] = await db.query(
-      `SELECT id_equip FROM equipamento WHERE id_equip=? AND id_secao=?`,
-      [id_equip, id_secao]
-    );
-    if (!eq) return res.status(400).json({ ok:false, error:'equip_nao_da_secao' });
-
-    await db.beginTransaction();
-    const id_local = await ensureArmazemLocalBySecaoId(id_secao);
-    await ensureSaldoRow(id_local, id_equip);
-    await db.query(
-      `UPDATE inventario_saldo SET qty = qty + ? WHERE id_local=? AND id_equip=?`,
-      [qty, id_local, id_equip]
-    );
-    await db.commit();
-    return res.json({ ok:true });
-  } catch (e) {
-    await db.rollback().catch(()=>{});
-    console.error('POST /secao/:nome/entrada', e);
-    return res.status(400).json({ ok:false, error: e.message || 'server_error' });
-  }
-});
-
-app.post('/secao/:nome/saida', requireAuth, async (req, res) => {
-  const secaoNome = req.params.nome;
-  const id_equip = Number.parseInt(req.body?.id_equip, 10);
-  const qty      = Number.parseInt(req.body?.qty, 10);
-
-  if (![id_equip, qty].every(Number.isInteger) || qty <= 0) {
-    return res.status(400).json({ ok:false, error:'invalid_payload' });
-  }
-
-  try {
-    const id_secao = await getSecaoIdByNome(secaoNome);
-    if (!id_secao) return res.status(404).json({ ok:false, error:'secao_not_found' });
-
-    const [[eq]] = await db.query(
-      `SELECT id_equip FROM equipamento WHERE id_equip=? AND id_secao=?`,
-      [id_equip, id_secao]
-    );
-    if (!eq) return res.status(400).json({ ok:false, error:'equip_nao_da_secao' });
-
-    await db.beginTransaction();
-    const id_local = await ensureArmazemLocalBySecaoId(id_secao);
-    await ensureSaldoRow(id_local, id_equip);
-
-    const atual = await getQtyForUpdate(id_local, id_equip);
-    if (qty > atual) {
-      await db.rollback().catch(()=>{});
-      return res.status(400).json({ ok:false, error:`sem_stock:${atual}` });
-    }
-
-    await db.query(
-      `UPDATE inventario_saldo SET qty = qty - ? WHERE id_local=? AND id_equip=?`,
-      [qty, id_local, id_equip]
-    );
-    await db.commit();
-    return res.json({ ok:true });
-  } catch (e) {
-    await db.rollback().catch(()=>{});
-    console.error('POST /secao/:nome/saida', e);
-    return res.status(400).json({ ok:false, error: e.message || 'server_error' });
-  }
 });
 
 // ========================= Checklists =========================
@@ -604,7 +494,7 @@ async function gerarPdfChecklist(chkId, cab, linhas) {
       { header: "Equipamento", accessor: "equipamento", width: 230 },
       { header: "Pres.",       accessor: r => r.presente ?? 0, width: 60, paddingLeft: 8, paddingRight: 8 },
       { header: "Falta",       accessor: r => r.falta    ?? 0, width: 60, paddingLeft: 8, paddingRight: 8 },
-      { header: "INOP",        accessor: r => r.inop     ?? 0, width: 60, paddingLeft: 8, paddingRight: 8 },
+      { header: "Manut.",      accessor: r => r.manutencao ?? 0, width: 70, paddingLeft: 8, paddingRight: 8 },
     ];
 
     drawTable(
@@ -625,7 +515,7 @@ async function gerarPdfChecklist(chkId, cab, linhas) {
   return filepath;
 }
 
-// POST /checklists
+// POST /checklists (manutencao = quantidade; inop nasce 0)
 app.post('/checklists', requireAuth, async (req, res) => {
   const id_veiculo = Number.parseInt(req.body?.id_veiculo, 10);
   const observacoes = (req.body?.observacoes || '').toString().slice(0,500);
@@ -651,21 +541,21 @@ app.post('/checklists', requireAuth, async (req, res) => {
       const id_local = await getCofreLocalId(id_veiculo, id_cofre);
       if (!id_local) throw new Error('cofre/localização não encontrado');
 
-      const p = Math.max(0, Number(it.presente ?? 0));
-      const f = Math.max(0, Number(it.falta ?? 0));
-      const i = Math.max(0, Number(it.inop ?? 0));
+      const p = Math.max(0, Number(it.presente   ?? 0));
+      const f = Math.max(0, Number(it.falta      ?? 0));
+      const m = Math.max(0, Number(it.manutencao ?? 0));
 
       const k = `${id_local}:${id_equip}`;
-      const cur = agg.get(k) || { p:0, f:0, i:0, id_local, id_equip };
-      cur.p += p; cur.f += f; cur.i += i;
+      const cur = agg.get(k) || { p:0, f:0, i:0, m:0, id_local, id_equip };
+      cur.p += p; cur.f += f; cur.m += m;   // i (inop) nasce 0 aqui
       agg.set(k, cur);
     }
 
-    const rows = [...agg.values()].map(x => [chkId, x.id_local, x.id_equip, x.p, x.f, x.i]);
+    const rows = [...agg.values()].map(x => [chkId, x.id_local, x.id_equip, x.p, x.f, 0 /*inop*/, x.m]);
     if (rows.length === 0) throw new Error('sem linhas');
 
     await db.query(
-      `INSERT INTO checklist_item (id_checklist, id_local, id_equip, presente, falta, inop) VALUES ?`,
+      `INSERT INTO checklist_item (id_checklist, id_local, id_equip, presente, falta, inop, manutencao) VALUES ?`,
       [rows]
     );
 
@@ -683,7 +573,7 @@ app.post('/checklists', requireAuth, async (req, res) => {
     );
     const [rowsForPdf] = await db.query(
       `SELECT e.nome AS equipamento, e.unidade, c.nome AS cofre,
-              chki.presente, chki.falta, chki.inop
+              chki.presente, chki.falta, chki.inop, chki.manutencao
          FROM checklist_item chki
          JOIN localizacao l ON l.id_local = chki.id_local
          JOIN cofre c       ON c.id_cofre = l.id_cofre
@@ -694,7 +584,6 @@ app.post('/checklists', requireAuth, async (req, res) => {
     );
     await gerarPdfChecklist(chkId, cab, rowsForPdf);
 
-    console.log('CHECKLIST criada', { chkId, linhas: rows.length });
     res.json({ ok:true, id: chkId, pdf: `/checklists/${chkId}/pdf` });
   } catch (e) {
     await db.rollback().catch(()=>{});
@@ -741,7 +630,7 @@ app.get('/checklists/:id', requireAuth, async (req, res) => {
 
   const [itens] = await db.query(
     `SELECT e.nome AS equipamento, e.unidade, c.nome AS cofre,
-            chki.presente, chki.falta, chki.inop
+            chki.presente, chki.falta, chki.inop, chki.manutencao
        FROM checklist_item chki
        JOIN localizacao l ON l.id_local = chki.id_local
        JOIN cofre c       ON c.id_cofre = l.id_cofre
@@ -758,7 +647,6 @@ app.get('/checklists/:id', requireAuth, async (req, res) => {
 app.get('/checklists/:id/pdf', requireAuth, async (req, res) => {
   const id = Number.parseInt(req.params.id,10);
   if (!Number.isInteger(id)) return res.status(400).json({ ok:false, error:'invalid_id' });
-  console.log('PDF pedido para checklist', id, 'por', req.user?.username);
 
   const [[cab]] = await db.query(
     `SELECT c.id, c.created_at, c.closed_at, c.observacoes, c.pdf_path,
@@ -769,10 +657,7 @@ app.get('/checklists/:id/pdf', requireAuth, async (req, res) => {
       WHERE c.id=?`,
     [id]
   );
-  if (!cab) {
-    console.warn('PDF 404: checklist não encontrada', id);
-    return res.status(404).json({ ok:false, error:'not_found' });
-  }
+  if (!cab) return res.status(404).json({ ok:false, error:'not_found' });
 
   const filename = cab.pdf_path || `checklist_${id}.pdf`;
   const filepath = path.join(STORAGE_DIR, filename);
@@ -786,7 +671,7 @@ app.get('/checklists/:id/pdf', requireAuth, async (req, res) => {
 
   const [rows] = await db.query(
     `SELECT e.nome AS equipamento, e.unidade, c.nome AS cofre,
-            chki.presente, chki.falta, chki.inop
+            chki.presente, chki.falta, chki.inop, chki.manutencao
        FROM checklist_item chki
        JOIN localizacao l ON l.id_local = chki.id_local
        JOIN cofre c       ON c.id_cofre = l.id_cofre
@@ -837,9 +722,10 @@ app.get('/reposicao', requireAuth, async (req, res) => {
         cof.nome               AS cofre,
         e.id_equip,
         e.nome                 AS equipamento,
-        CAST(SUM(chki.falta) AS UNSIGNED) AS falta,
-        CAST(SUM(chki.inop)  AS UNSIGNED) AS inop,
-        MAX(c.created_at)     AS last_seen
+        CAST(SUM(chki.falta) AS UNSIGNED)      AS falta,
+        CAST(SUM(chki.inop)  AS UNSIGNED)      AS inop,
+        CAST(SUM(chki.manutencao) AS UNSIGNED) AS manutencao,
+        MAX(c.created_at)                      AS last_seen
       FROM checklist_item chki
       JOIN checklist   c   ON c.id = chki.id_checklist
       JOIN localizacao l   ON l.id_local = chki.id_local AND l.tipo='COFRE'
@@ -847,9 +733,9 @@ app.get('/reposicao', requireAuth, async (req, res) => {
       JOIN cofre       cof ON cof.id_cofre = l.id_cofre
       JOIN equipamento e   ON e.id_equip = chki.id_equip
       WHERE ${where.join(' AND ')}
-        AND (chki.falta > 0 OR chki.inop > 0)
+        AND (chki.falta > 0 OR chki.inop > 0 OR chki.manutencao > 0)
       GROUP BY v.id_veiculo, cof.id_cofre, e.id_equip
-      HAVING (SUM(chki.falta) > 0 OR SUM(chki.inop) > 0)
+      HAVING (SUM(chki.falta) > 0 OR SUM(chki.inop) > 0 OR SUM(chki.manutencao) > 0)
       ORDER BY v.codigo, cof.nome, e.nome
     `;
 
@@ -858,6 +744,110 @@ app.get('/reposicao', requireAuth, async (req, res) => {
   } catch (e) {
     console.error('ERRO /reposicao (acumulado):', e);
     return res.status(500).json({ ok:false, error: e.message || 'server_error' });
+  }
+});
+
+// ====== DECISÃO DE MANUTENÇÃO (INOP / REPOR) COM QUANTIDADE E ORIGEM ======
+app.post('/reposicao/decidir', requireAuth, async (req, res) => {
+  const { id_veiculo, id_cofre, id_equip, decidir, qty, from } = req.body || {};
+  if (!['inop','repor'].includes(decidir))
+    return res.status(400).json({ ok:false, error:'decisao_invalida' });
+
+  const idV = Number.parseInt(id_veiculo, 10);
+  const idC = Number.parseInt(id_cofre,   10);
+  const idE = Number.parseInt(id_equip,   10);
+  const q   = Number.parseInt(qty, 10);
+
+  if (![idV,idC,idE].every(Number.isInteger))
+    return res.status(400).json({ ok:false, error:'payload_invalido' });
+  if (!Number.isInteger(q) || q <= 0)
+    return res.status(400).json({ ok:false, error:'qty_invalida' });
+
+  try {
+    await db.beginTransaction();
+
+    const id_local = await getCofreLocalId(idV, idC);
+    if (!id_local) throw new Error('cofre_nao_encontrado');
+
+    if (decidir === 'inop') {
+      // move Manutenção -> INOP (capado à manutencao atual)
+      const [[row]] = await db.query(
+        `SELECT chki.id_checklist, chki.manutencao
+           FROM checklist_item chki
+           JOIN checklist c ON c.id = chki.id_checklist
+          WHERE c.id_veiculo = ?
+            AND chki.id_local = ?
+            AND chki.id_equip = ?
+            AND chki.manutencao > 0
+          ORDER BY c.created_at DESC
+          LIMIT 1`,
+        [idV, id_local, idE]
+      );
+      if (!row) { await db.rollback(); return res.status(404).json({ ok:false, error:'sem_item_em_manutencao' }); }
+
+      const moveQty = Math.max(0, Math.min(q, row.manutencao));
+      if (moveQty === 0) { await db.rollback(); return res.status(400).json({ ok:false, error:'qty_zero_ou_maior_que_manutencao' }); }
+
+      await db.query(
+        `UPDATE checklist_item
+            SET inop = inop + ?, 
+                manutencao = manutencao - ?
+          WHERE id_checklist = ? AND id_local = ? AND id_equip = ?`,
+        [moveQty, moveQty, row.id_checklist, id_local, idE]
+      );
+    } else {
+      // 'repor' com origem opcional: from = 'inop' | 'falta' | 'manutencao'
+      const validFrom = ['inop', 'falta', 'manutencao', undefined, null];
+      if (!validFrom.includes(from)) {
+        await db.rollback();
+        return res.status(400).json({ ok:false, error:'origem_invalida' });
+      }
+
+      // Função auxiliar
+      async function decField(field) {
+        const [[row]] = await db.query(
+          `SELECT chki.id_checklist, chki.${field} AS val
+             FROM checklist_item chki
+             JOIN checklist c ON c.id = chki.id_checklist
+            WHERE c.id_veiculo = ?
+              AND chki.id_local = ?
+              AND chki.id_equip = ?
+              AND chki.${field} > 0
+            ORDER BY c.created_at DESC
+            LIMIT 1`,
+          [idV, id_local, idE]
+        );
+        if (!row) return false;
+        const useQty = Math.max(0, Math.min(q, row.val));
+        if (useQty === 0) return false;
+        await db.query(
+          `UPDATE checklist_item
+              SET ${field} = ${field} - ?
+            WHERE id_checklist = ? AND id_local = ? AND id_equip = ?`,
+          [useQty, row.id_checklist, id_local, idE]
+        );
+        return true;
+      }
+
+      if (from) {
+        // Repor apenas da origem escolhida
+        const ok = await decField(from);
+        if (!ok) { await db.rollback(); return res.status(400).json({ ok:false, error:`nada_para_repor_em_${from}` }); }
+      } else {
+        // Sem origem: prioridade INOP > FALTA > MANUTENCAO
+        let ok = await decField('inop');
+        if (!ok) ok = await decField('falta');
+        if (!ok) ok = await decField('manutencao');
+        if (!ok) { await db.rollback(); return res.status(404).json({ ok:false, error:'nada_para_repor' }); }
+      }
+    }
+
+    await db.commit();
+    return res.json({ ok:true });
+  } catch (e) {
+    await db.rollback().catch(()=>{});
+    console.error('POST /reposicao/decidir', e);
+    return res.status(400).json({ ok:false, error: e.message || 'server_error' });
   }
 });
 
