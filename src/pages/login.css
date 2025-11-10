@@ -1,5 +1,9 @@
 @import url('https://fonts.googleapis.com/css2?family=Karantina:wght@300;400;700&display=swap');
 
+* {
+    margin: auto;
+}
+
 .header {
     display: flex;
     flex-direction: row;

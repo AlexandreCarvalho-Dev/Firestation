@@ -18,14 +18,14 @@ const app = express();
 import 'dotenv/config';
 
 const {
-  NODE_ENV,
-  DB_HOST,
-  DB_USER,
-  DB_PASS,
-  DB_NAME,
-  PORT,
-  CLIENT_ORIGINS,
-  JWT_SECRET
+  NODE_ENV = 'development',
+  CLIENT_ORIGINS= "http://192.168.1.101:5173",
+  JWT_SECRET = "muda-isto",
+  DB_HOST = "localhost",
+  DB_USER = "root",
+  DB_PASS = "12345678",
+  DB_NAME = "bombeiros",
+  PORT = 3001,
 } = process.env;
 
 
@@ -44,7 +44,7 @@ function isLanDevOrigin(origin) {
   try {
     const u = new URL(origin);
     return u.protocol === "http:" &&
-           /^192\.168\.1\.\d{1,3}$/.test(u.hostname) &&
+           /^172\.20\.10\.\d{1,3}$/.test(u.hostname) &&
            (u.port === "5173" || u.port === "");
   } catch { return false; }
 }
