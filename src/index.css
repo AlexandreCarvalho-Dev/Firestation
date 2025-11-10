@@ -28,7 +28,7 @@ body {
   min-height: 100vh;
   background:
     linear-gradient(rgba(0, 0, 0, 0.7), rgba(0, 0, 0, 0.7)),
-    url("Assets/background.jpeg") no-repeat center center fixed;
+    url("../assets/background.jpeg") no-repeat center center fixed;
   background-size: cover;
 }
 
