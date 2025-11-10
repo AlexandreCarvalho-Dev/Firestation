@@ -1,6 +1,5 @@
 // src/pages/LoginPage.jsx
 import { useState } from 'react';
-import logo from '../assets/Logo_Bombeiros.png';
 import './login.css';
 
 export default function LoginPage({ onLogin, onCreate }) {
@@ -30,7 +29,7 @@ export default function LoginPage({ onLogin, onCreate }) {
   return (
     <div className="login-wrap">
       <div className="header">
-        <img src={logo} alt="Bombeiros Voluntários de Algés" />
+        <img src="/assets/Logo_Bombeiros.png" alt="Bombeiros Voluntários de Algés" />
         <h2>Bombeiros <br/>Voluntários de Algés</h2>
       </div>
 
