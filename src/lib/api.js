@@ -1,5 +1,5 @@
 // src/lib/api.js
-export const API_BASE = import.meta.env.PROD ? '/api' : 'http://192.168.1.101:3001';
+ export const API_BASE = import.meta.env.PROD ? '/api' : 'http://192.168.1.101:3001';
 
 async function asJson(res) {
   const data = await res.json().catch(() => ({}));
@@ -29,7 +29,7 @@ export async function apiMe() {
 
 export async function apiIsAdmin() {
   const res = await fetch(`${API_BASE}/auth/is-admin`, { credentials: 'include' });
-  return asJson(res);
+  return asJson(res); // { ok:true, isAdmin: boolean }
 }
 
 export async function apiLogout() {

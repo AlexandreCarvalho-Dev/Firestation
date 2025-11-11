@@ -2,53 +2,38 @@
 import { useEffect, useMemo, useState } from 'react';
 import './inventarios.css';
 import VehicleInventarioPage from './VehicleInventarioPage.jsx';
-
-const API_BASE = `http://${window.location.hostname}:3001`;
+import { API_BASE } from '../lib/api';
 
 export default function InventariosPage({ onBack }) {
   const API = API_BASE;
   const secaoNome = 'Material';
 
-  // Vista atual
-  const [inv, setInv] = useState(null); // 'secao' | 'veiculo'
+  const [inv, setInv] = useState(null);
 
-  // Flags e mensagens
   const [loading, setLoading] = useState(false);
   const [erro, setErro] = useState('');
 
-  // Dados
   const [totais, setTotais] = useState([]);
   const [breakdown, setBreakdown] = useState([]);
   const [catalogo, setCatalogo] = useState([]);
   const [veiculos, setVeiculos] = useState([]);
 
-  // Filtros
-  // ALL | SECAO | VEIC   (VEIC = itens que estão em cofres/veículos)
   const [filtro, setFiltro] = useState('ALL');
-  // guarda o código do veículo (porque breakdown traz "veiculo" como código)
   const [veicSel, setVeicSel] = useState('ALL');
 
-  // Form: criar novo equipamento
+  // Criar novo equipamento
   const [novoNome, setNovoNome] = useState('');
   const [novoQty, setNovoQty] = useState('1');
-  const [nrSerie, setNrSerie] = useState(''); // opcional (guardado no futuro)
+  const [nrSerie, setNrSerie] = useState('');
 
-  // Form: adicionar existente
+  // ÚNICO seletor para adicionar/remover
   const [equipSel, setEquipSel] = useState('');
-  const [qtyAdd, setQtyAdd] = useState('1');
-
-  // Form: remover existente
-  const [equipRem, setEquipRem] = useState('');
-  const [qtyRem, setQtyRem] = useState('1');
+  const [qtyMov, setQtyMov] = useState('1');
   const [motivoRem, setMotivoRem] = useState('');
-
-  /* ================== Loaders ================== */
 
   async function loadCatalogo() {
     try {
-      const r = await fetch(`${API}/secao/${encodeURIComponent(secaoNome)}/catalogo`, {
-        credentials: 'include',
-      });
+      const r = await fetch(`${API}/secao/${encodeURIComponent(secaoNome)}/catalogo`, { credentials: 'include' });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       setCatalogo(await r.json());
     } catch (e) {
@@ -60,9 +45,7 @@ export default function InventariosPage({ onBack }) {
     setLoading(true);
     setErro('');
     try {
-      const r = await fetch(`${API}/secao/${encodeURIComponent(secaoNome)}/inventario`, {
-        credentials: 'include',
-      });
+      const r = await fetch(`${API}/secao/${encodeURIComponent(secaoNome)}/inventario`, { credentials: 'include' });
       const raw = await r.text();
       if (!r.ok) {
         let body;
@@ -85,12 +68,10 @@ export default function InventariosPage({ onBack }) {
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       setVeiculos(await r.json());
     } catch (e) {
-      // não bloqueia a página
       console.warn('Falha a carregar veículos:', e.message);
     }
   }
 
-  // Carrega dados quando a vista da secção é ativada
   useEffect(() => {
     if (inv !== 'secao') return;
     loadCatalogo();
@@ -98,24 +79,18 @@ export default function InventariosPage({ onBack }) {
     loadVeiculos();
   }, [inv]);
 
-  /* ===== Helpers de filtragem e totais ===== */
-
-  // Filtra as linhas do breakdown conforme filtro/veículo
   const filteredBreakdown = useMemo(() => {
-    if (filtro === 'SECAO') {
-      return breakdown.filter(r => r.tipo === 'SECAO');
-    }
+    if (filtro === 'SECAO') return breakdown.filter(r => r.tipo === 'SECAO');
     if (filtro === 'VEIC') {
       const base = breakdown.filter(r => r.tipo === 'COFRE');
       if (veicSel === 'ALL') return base;
       return base.filter(r => (r.veiculo || '') === veicSel);
     }
-    return breakdown; // ALL
+    return breakdown;
   }, [breakdown, filtro, veicSel]);
 
-  // Recalcula os totais a partir do breakdown filtrado (consistente com a tabela)
   const filteredTotals = useMemo(() => {
-    const map = new Map(); // equipamento -> soma qty
+    const map = new Map();
     for (const row of filteredBreakdown) {
       const key = row.equipamento;
       const qty = parseInt(row.qty, 10) || 0;
@@ -125,8 +100,6 @@ export default function InventariosPage({ onBack }) {
       .sort((a, b) => a[0].localeCompare(b[0]))
       .map(([equipamento, total]) => ({ equipamento, total }));
   }, [filteredBreakdown]);
-
-  /* ================== Actions ================== */
 
   async function criarEquipamento(e) {
     e.preventDefault();
@@ -140,26 +113,20 @@ export default function InventariosPage({ onBack }) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({
-        nome: novoNome,
-        qty: q,
-        nr_serie: nrSerie?.trim() || null,
-      }),
+      body: JSON.stringify({ nome: novoNome, qty: q, nr_serie: nrSerie?.trim() || null }),
     });
     const body = await r.json().catch(() => ({}));
     if (!r.ok) {
       setErro(`Falha ao criar equipamento: ${body?.error || `HTTP ${r.status}`}`);
       return;
     }
-    setNovoNome('');
-    setNovoQty('1');
-    setNrSerie('');
+    setNovoNome(''); setNovoQty('1'); setNrSerie('');
     await Promise.all([loadCatalogo(), loadInventario()]);
   }
 
-  async function adicionarExistente(e) {
-    e.preventDefault();
-    const q = Number.parseInt(qtyAdd, 10);
+  // Botões do formulário único
+  async function onAdicionarClick() {
+    const q = Number.parseInt(qtyMov, 10);
     if (!equipSel || !Number.isInteger(q) || q <= 0) {
       setErro('Selecione equipamento e quantidade válida (>0).');
       return;
@@ -176,14 +143,13 @@ export default function InventariosPage({ onBack }) {
       setErro(`Falha ao adicionar: ${body?.error || `HTTP ${r.status}`}`);
       return;
     }
-    setQtyAdd('1');
+    setQtyMov('1');
     await loadInventario();
   }
 
-  async function removerDoArmazem(e) {
-    e.preventDefault();
-    const q = Number.parseInt(qtyRem, 10);
-    if (!equipRem || !Number.isInteger(q) || q <= 0) {
+  async function onRemoverClick() {
+    const q = Number.parseInt(qtyMov, 10);
+    if (!equipSel || !Number.isInteger(q) || q <= 0) {
       setErro('Selecione equipamento e quantidade válida (>0).');
       return;
     }
@@ -193,7 +159,7 @@ export default function InventariosPage({ onBack }) {
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
       body: JSON.stringify({
-        id_equip: Number.parseInt(equipRem, 10),
+        id_equip: Number.parseInt(equipSel, 10),
         qty: q,
         motivo: motivoRem,
       }),
@@ -203,12 +169,9 @@ export default function InventariosPage({ onBack }) {
       setErro(`Falha ao remover: ${body?.error || `HTTP ${r.status}`}`);
       return;
     }
-    setQtyRem('1');
-    setMotivoRem('');
+    setQtyMov('1'); setMotivoRem('');
     await loadInventario();
   }
-
-  /* ================== Render ================== */
 
   return (
     <div className="page">
@@ -222,7 +185,6 @@ export default function InventariosPage({ onBack }) {
         <div className="section-content">
           <h1 className="title">Secção</h1>
 
-          {/* Criar novo equipamento */}
           <h4>Criar novo equipamento e adicionar</h4>
           <form className="entrada-form" onSubmit={criarEquipamento}>
             <input
@@ -252,9 +214,8 @@ export default function InventariosPage({ onBack }) {
             <button type="submit">Adicionar</button>
           </form>
 
-          {/* Entrada de existente */}
-          <h4>Adicionar quantidade de equipamento</h4>
-          <form className="entrada-form" onSubmit={adicionarExistente}>
+          <h4>Movimentar quantidade (Adicionar / Remover)</h4>
+          <div className="entrada-form" onSubmit={(e)=>e.preventDefault()}>
             <select
               value={equipSel}
               onChange={(e) => setEquipSel(e.target.value)}
@@ -267,57 +228,36 @@ export default function InventariosPage({ onBack }) {
                 </option>
               ))}
             </select>
+
             <input
               type="number"
               min="1"
               step="1"
-              value={qtyAdd}
-              onChange={(e) => setQtyAdd(e.target.value)}
+              value={qtyMov}
+              onChange={(e) => setQtyMov(e.target.value)}
               required
               placeholder="Quantidade"
             />
-            <button type="submit">Adicionar</button>
-          </form>
 
-          {/* Saída */}
-          <h4>Remover equipamento</h4>
-          <form className="entrada-form" onSubmit={removerDoArmazem}>
-            <select
-              value={equipRem}
-              onChange={(e) => setEquipRem(e.target.value)}
-              required
-            >
-              <option value="">Remover: escolha…</option>
-              {catalogo.map(e => (
-                <option key={e.id_equip} value={e.id_equip}>
-                  {e.nome} ({e.unidade})
-                </option>
-              ))}
-            </select>
-            <input
-              type="number"
-              min="1"
-              step="1"
-              value={qtyRem}
-              onChange={(e) => setQtyRem(e.target.value)}
-              required
-              placeholder="Qtd. a remover"
-            />
+            {/* Motivo apenas usado ao remover; é opcional */}
             <input
               type="text"
               value={motivoRem}
               onChange={(e) => setMotivoRem(e.target.value)}
-              placeholder="Motivo (opcional)"
+              placeholder="Motivo (opcional, só para remover)"
             />
-            <button type="submit">Remover</button>
-          </form>
+
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button type="button" onClick={onAdicionarClick}>Adicionar</button>
+              <button type="button" onClick={onRemoverClick}>Remover</button>
+            </div>
+          </div>
 
           {loading && <p className="muted">A carregar…</p>}
           {erro && <p className="erro">{erro}</p>}
 
           {!loading && !erro && (
             <div className="tables-wrap">
-              {/* FILTROS */}
               <div className="toolbar" style={{ alignItems: 'center', flexWrap: 'wrap' }}>
                 <label>
                   <input
@@ -361,7 +301,6 @@ export default function InventariosPage({ onBack }) {
                 </label>
               </div>
 
-              {/* Totais (recalculados com base no filtro atual) */}
               <div className="table-card">
                 <h3>Totais</h3>
                 <div className="table-scroll">
@@ -387,7 +326,6 @@ export default function InventariosPage({ onBack }) {
                 </div>
               </div>
 
-              {/* Breakdown */}
               <div className="table-card">
                 <h3>Distribuição (Armazém / Veículos / Cofres)</h3>
                 <div className="table-scroll">

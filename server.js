@@ -149,6 +149,21 @@ const loginLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+async function ensureArmazemLocalBySecaoId(id_secao) {
+  const [[row]] = await db.query(
+    "SELECT id_local FROM localizacao WHERE tipo='SECAO' AND id_secao=? LIMIT 1",
+    [id_secao]
+  );
+  if (row?.id_local) return row.id_local;
+
+  const [ins] = await db.query(
+    "INSERT INTO localizacao (tipo, id_secao) VALUES ('SECAO', ?)",
+    [id_secao]
+  );
+  return ins.insertId;
+}
+
+
 /* === Helper: regra de admin === */
 async function isUserAdmin(userId) {
   const [[row]] = await db.query(
@@ -918,6 +933,131 @@ app.get("/auth/is-admin", requireAuth, async (req, res) => {
     res.status(500).json({ ok: false, error: "server_error" });
   }
 });
+
+/* ========================= Secção (Material): CREATE / MOVIMENTOS ========================= */
+// Criar equipamento na secção (ou reaproveitar existente) e dar entrada no armazém da secção
+app.post("/secao/:nome/equipamento", requireAuth, async (req, res) => {
+  try {
+    const secaoNome = req.params.nome;
+    const { nome, unidade = "un", qty = 0, nr_serie = null } = req.body || {};
+
+    if (!nome || String(nome).trim() === "")
+      return res.status(400).json({ ok: false, error: "missing_nome" });
+
+    const id_secao = await getSecaoIdByNome(secaoNome);
+    if (!id_secao) return res.status(404).json({ ok: false, error: "secao_not_found" });
+
+    const q = Number.parseInt(qty, 10) || 0;
+    const uni = String(unidade || "un").slice(0, 16);
+
+    // cria (ou obtém) equipamento na secção
+    let id_equip;
+    try {
+      const [ins] = await db.query(
+        `INSERT INTO equipamento (nome, unidade, id_secao) VALUES (TRIM(?), ?, ?)
+         ON DUPLICATE KEY UPDATE id_equip = LAST_INSERT_ID(id_equip)`,
+        [nome, uni, id_secao]
+      );
+      id_equip = ins.insertId;
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e.message });
+    }
+
+    // garante local de armazém da secção e linha de saldo
+    const id_local = await ensureArmazemLocalBySecaoId(id_secao);
+    await ensureSaldoRow(id_local, id_equip);
+
+    if (q > 0) {
+      await db.query(
+        `UPDATE inventario_saldo SET qty = qty + ? WHERE id_local=? AND id_equip=?`,
+        [q, id_local, id_equip]
+      );
+    }
+
+    return res.json({ ok: true, id_equip, added: q, unidade: uni });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: "server_error" });
+  }
+});
+
+// Entrada no ARMAZÉM da secção (adiciona stock)
+app.post("/secao/:nome/entrada", requireAuth, async (req, res) => {
+  try {
+    const secaoNome = req.params.nome;
+    const id_secao = await getSecaoIdByNome(secaoNome);
+    if (!id_secao) return res.status(404).json({ ok: false, error: "secao_not_found" });
+
+    const id_equip = Number.parseInt(req.body?.id_equip, 10);
+    const qty = Number.parseInt(req.body?.qty, 10);
+    if (!Number.isInteger(id_equip) || !Number.isInteger(qty) || qty <= 0)
+      return res.status(400).json({ ok: false, error: "invalid_payload" });
+
+    // valida que o equipamento pertence à secção
+    const [[einfo]] = await db.query(
+      `SELECT id_equip FROM equipamento WHERE id_equip=? AND id_secao=?`,
+      [id_equip, id_secao]
+    );
+    if (!einfo) return res.status(404).json({ ok: false, error: "equip_not_in_secao" });
+
+    const id_local = await ensureArmazemLocalBySecaoId(id_secao);
+    await ensureSaldoRow(id_local, id_equip);
+
+    await db.query(
+      `UPDATE inventario_saldo SET qty = qty + ? WHERE id_local=? AND id_equip=?`,
+      [qty, id_local, id_equip]
+    );
+
+    return res.json({ ok: true });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: "server_error" });
+  }
+});
+
+// Saída do ARMAZÉM da secção (remove stock)
+app.post("/secao/:nome/saida", requireAuth, async (req, res) => {
+  try {
+    const secaoNome = req.params.nome;
+    const id_secao = await getSecaoIdByNome(secaoNome);
+    if (!id_secao) return res.status(404).json({ ok: false, error: "secao_not_found" });
+
+    const id_equip = Number.parseInt(req.body?.id_equip, 10);
+    const qty = Number.parseInt(req.body?.qty, 10);
+    // motivo é opcional: const motivo = (req.body?.motivo || "").toString().slice(0, 255);
+
+    if (!Number.isInteger(id_equip) || !Number.isInteger(qty) || qty <= 0)
+      return res.status(400).json({ ok: false, error: "invalid_payload" });
+
+    const [[einfo]] = await db.query(
+      `SELECT id_equip FROM equipamento WHERE id_equip=? AND id_secao=?`,
+      [id_equip, id_secao]
+    );
+    if (!einfo) return res.status(404).json({ ok: false, error: "equip_not_in_secao" });
+
+    const id_local = await ensureArmazemLocalBySecaoId(id_secao);
+    await ensureSaldoRow(id_local, id_equip);
+
+    await db.beginTransaction();
+    try {
+      const disponivel = await getQtyForUpdate(id_local, id_equip); // FOR UPDATE
+      if (qty > disponivel) {
+        await db.rollback();
+        return res.status(400).json({ ok: false, error: `sem_stock:${disponivel}` });
+      }
+      await db.query(
+        `UPDATE inventario_saldo SET qty = qty - ? WHERE id_local=? AND id_equip=?`,
+        [qty, id_local, id_equip]
+      );
+      await db.commit();
+      return res.json({ ok: true });
+    } catch (e) {
+      await db.rollback().catch(() => {});
+      return res.status(500).json({ ok: false, error: "tx_error" });
+    }
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: "server_error" });
+  }
+});
+
 
 /* ========================= Start ========================= */
 app.listen(Number(PORT), () => {
