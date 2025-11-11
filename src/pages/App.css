@@ -19,21 +19,21 @@
 h1, h2 {
   color: white;
 }
-.header {
-  display: flex;
-  flex-direction: row;
+.header-mainpage {
+  display: block;
   margin: auto;
   justify-content: center;
   align-items: center;
   color: white;
 }
 
-.header select{
+.header-mainpage select{
   color: white;
   background-color: red;
   height: 30px;
-  padding-left: 20px;
   border: none;
+  border-radius: 20px;
+  margin-left: 3vw;
 }
 
 button {

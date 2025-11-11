@@ -1,4 +1,4 @@
-// server.js (Node 18+ com "type":"module" no package.json)
+// server.js
 import express from "express";
 import mysql from "mysql2/promise";
 import cors from "cors";
@@ -11,15 +11,13 @@ import fs from "fs";
 import fsp from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
+import "dotenv/config";
 
-// ========================= App & Config =========================
 const app = express();
 
-import 'dotenv/config';
-
 const {
-  NODE_ENV = 'development',
-  CLIENT_ORIGINS= "http://192.168.1.101:5173",
+  NODE_ENV = "development",
+  CLIENT_ORIGINS = "http://192.168.1.101:5173",
   JWT_SECRET = "muda-isto",
   DB_HOST = "localhost",
   DB_USER = "root",
@@ -28,26 +26,30 @@ const {
   PORT = 3001,
 } = process.env;
 
-
 const IS_PROD = NODE_ENV === "production";
 
-// ====== Storage local para PDFs ======
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const STORAGE_DIR = path.join(__dirname, "storage", "checklists");
 await fsp.mkdir(STORAGE_DIR, { recursive: true });
 
-// ========================= CORS ========================= 192.168.1.86
-const allowlist = CLIENT_ORIGINS.split(",").map(s => s.trim()).filter(Boolean);
+const allowlist = CLIENT_ORIGINS.split(",").map((s) => s.trim()).filter(Boolean);
 function isLanDevOrigin(origin) {
   if (IS_PROD || !origin) return false;
   try {
     const u = new URL(origin);
-    return u.protocol === "http:" &&
-           /^172\.20\.10\.\d{1,3}$/.test(u.hostname) &&
-           (u.port === "5173" || u.port === "");
-  } catch { return false; }
+    const isHttp = u.protocol === "http:";
+    const isLocal =
+      u.hostname === "localhost" ||
+      u.hostname === "127.0.0.1" ||
+      /^192\.168\.1\.90$/.test(u.hostname);
+    const isPort = u.port === "5173" || u.port === "";
+    return isHttp && isLocal && isPort;
+  } catch {
+    return false;
+  }
 }
+
 const corsOptions = {
   origin: (origin, cb) => {
     if (!origin) return cb(null, true);
@@ -55,24 +57,28 @@ const corsOptions = {
     return cb(new Error(`CORS: origem não permitida: ${origin}`));
   },
   credentials: true,
-  allowedHeaders: ["Content-Type","Authorization","X-Requested-With"],
-  methods: ["GET","POST","PUT","PATCH","DELETE","OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   maxAge: 600,
 };
 app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
-
 app.use(express.json());
 app.use(cookieParser());
-app.use((req, _res, next) => { console.log(`${req.method} ${req.path}`); next(); });
-
-// ========================= DB =========================
-const db = await mysql.createConnection({
-  host: DB_HOST, user: DB_USER, password: DB_PASS, database: DB_NAME,
-  multipleStatements: false
+app.use((req, _res, next) => {
+  console.log(`${req.method} ${req.path}`);
+  next();
 });
 
-// ========================= Helpers DB =========================
+const db = await mysql.createConnection({
+  host: DB_HOST,
+  user: DB_USER,
+  password: DB_PASS,
+  database: DB_NAME,
+  multipleStatements: false,
+});
+
+/* ========================= Helpers DB ========================= */
 async function getSecaoIdByNome(nome) {
   const [r] = await db.query("SELECT id_secao FROM secao WHERE nome=?", [nome]);
   return r?.[0]?.id_secao ?? null;
@@ -104,8 +110,6 @@ async function ensureSaldoRow(id_local, id_equip) {
     [id_local, id_equip]
   );
 }
-
-// ===== Helpers Secção =====
 async function ensureArmazemLocalBySecaoId(id_secao) {
   const [[ex]] = await db.query(
     `SELECT id_local FROM localizacao WHERE tipo='SECAO' AND id_secao=? LIMIT 1`,
@@ -114,7 +118,7 @@ async function ensureArmazemLocalBySecaoId(id_secao) {
   if (ex?.id_local) return ex.id_local;
 
   const [[sec]] = await db.query(`SELECT nome FROM secao WHERE id_secao=?`, [id_secao]);
-  if (!sec?.nome) throw new Error('secao_nao_encontrada');
+  if (!sec?.nome) throw new Error("secao_nao_encontrada");
 
   const nomeLocal = `Armazém ${sec.nome}`;
   const [ins] = await db.query(
@@ -123,7 +127,7 @@ async function ensureArmazemLocalBySecaoId(id_secao) {
   );
   return ins.insertId;
 }
-async function ensureEquipamentoOnSecao(id_secao, nomeEquip, unidade = 'un') {
+async function ensureEquipamentoOnSecao(id_secao, nomeEquip, unidade = "un") {
   try {
     const [ins] = await db.query(
       `INSERT INTO equipamento (nome, unidade, id_secao) VALUES (?,?,?)`,
@@ -131,7 +135,7 @@ async function ensureEquipamentoOnSecao(id_secao, nomeEquip, unidade = 'un') {
     );
     return ins.insertId;
   } catch (e) {
-    if (e?.code !== 'ER_DUP_ENTRY') throw e;
+    if (e?.code !== "ER_DUP_ENTRY") throw e;
     const [[r]] = await db.query(
       `SELECT id_equip FROM equipamento WHERE nome=? AND id_secao=? LIMIT 1`,
       [nomeEquip, id_secao]
@@ -140,43 +144,93 @@ async function ensureEquipamentoOnSecao(id_secao, nomeEquip, unidade = 'un') {
   }
 }
 
-// ========================= Auth (JWT em cookie httpOnly) =========================
+/* ========================= Auth (JWT) ========================= */
 const JWT_EXPIRES = "7d";
 function signToken(user) {
-  const payload = { id: user.id, username: user.username, nome: user.nome, apelido: user.apelido, graduacao: user.graduacao };
+  const payload = {
+    id: user.id,
+    username: user.username,
+    nome: user.nome,
+    apelido: user.apelido,
+    graduacao: user.graduacao,
+  };
   return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES });
 }
 function setAuthCookie(res, token) {
-  res.cookie("token", token, { httpOnly: true, sameSite: "lax", secure: IS_PROD, maxAge: 7*24*60*60*1000 });
+  res.cookie("token", token, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: IS_PROD,
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+  });
 }
 function clearAuthCookie(res) {
   res.clearCookie("token", { httpOnly: true, sameSite: "lax", secure: IS_PROD });
 }
 function requireAuth(req, res, next) {
   const token = req.cookies?.token;
-  if (!token) return res.status(401).json({ ok:false, error:"no_token" });
-  try { req.user = jwt.verify(token, JWT_SECRET); next(); }
-  catch { return res.status(401).json({ ok:false, error:"invalid_token" }); }
+  if (!token) return res.status(401).json({ ok: false, error: "no_token" });
+  try {
+    req.user = jwt.verify(token, JWT_SECRET);
+    next();
+  } catch {
+    return res.status(401).json({ ok: false, error: "invalid_token" });
+  }
 }
-const loginLimiter = rateLimit({ windowMs: 10*60*1000, max: 20, standardHeaders: true, legacyHeaders: false });
-
-// ========================= Health =========================
-app.get("/health", async (_req, res) => {
-  try { const [[r]] = await db.query("SELECT 1 AS ok"); res.json({ ok: r.ok === 1 }); }
-  catch (e) { res.status(500).json({ ok:false, error:e.message }); }
+const loginLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
 });
 
-// ========================= Veículos =========================
+/* === Helper: regra de admin === */
+async function isUserAdmin(userId) {
+  const [[row]] = await db.query(
+    `
+    SELECT COUNT(*) AS n
+      FROM bombeiro_funcao bf
+      JOIN funcao f ON f.id = bf.id_funcao
+     WHERE bf.id_bombeiro = ?
+       AND (
+         f.nome COLLATE utf8mb4_0900_ai_ci LIKE 'administrativ%'
+         OR (
+           f.nome COLLATE utf8mb4_0900_ai_ci LIKE 'responsavel%'
+           AND f.nome COLLATE utf8mb4_0900_ai_ci LIKE '%sec%'
+           AND f.nome COLLATE utf8mb4_0900_ai_ci LIKE '%material%'
+         )
+       )
+    `,
+    [userId]
+  );
+  return (row?.n || 0) > 0;
+}
+
+/* ========================= Health ========================= */
+app.get("/health", async (_req, res) => {
+  try {
+    const [[r]] = await db.query("SELECT 1 AS ok");
+    res.json({ ok: r.ok === 1 });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+/* ========================= Veículos ========================= */
 app.get("/veiculo", async (_req, res) => {
   try {
-    const [rows] = await db.query("SELECT id_veiculo, codigo FROM veiculo WHERE ativo = 1 ORDER BY codigo");
+    const [rows] = await db.query(
+      "SELECT id_veiculo, codigo FROM veiculo WHERE ativo = 1 ORDER BY codigo"
+    );
     res.json(rows);
-  } catch (e) { res.status(500).json({ error:e.message }); }
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.get("/veiculo/:id/cofres", async (req, res) => {
   const idVeic = Number.parseInt(req.params.id, 10);
-  if (!Number.isInteger(idVeic)) return res.status(400).json({ error:"id inválido" });
+  if (!Number.isInteger(idVeic)) return res.status(400).json({ error: "id inválido" });
   try {
     const [rows] = await db.query(
       `SELECT c.id_cofre, c.nome
@@ -187,12 +241,14 @@ app.get("/veiculo/:id/cofres", async (req, res) => {
       [idVeic]
     );
     res.json(rows);
-  } catch (e) { res.status(500).json({ error:e.message }); }
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.get("/veiculo/:id/inventario", async (req, res) => {
   const idVeic = Number.parseInt(req.params.id, 10);
-  if (!Number.isInteger(idVeic)) return res.status(400).json({ error:"id inválido" });
+  if (!Number.isInteger(idVeic)) return res.status(400).json({ error: "id inválido" });
   try {
     const [rows] = await db.query(
       `SELECT 
@@ -208,35 +264,31 @@ app.get("/veiculo/:id/inventario", async (req, res) => {
       [idVeic]
     );
     res.json(rows);
-  } catch (e) { res.status(500).json({ error:e.message }); }
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
-// ===== Movimentos entre ARMAZÉM da secção e COFRE do veículo =====
-app.post('/veiculo/:id/cofre/:cofreId/entrada', async (req, res) => {
-  const idVeic   = Number.parseInt(req.params.id, 10);
-  const idCofre  = Number.parseInt(req.params.cofreId, 10);
+/* ========================= Movimentos ========================= */
+app.post("/veiculo/:id/cofre/:cofreId/entrada", async (req, res) => {
+  const idVeic = Number.parseInt(req.params.id, 10);
+  const idCofre = Number.parseInt(req.params.cofreId, 10);
   const id_equip = Number.parseInt(req.body?.id_equip, 10);
-  const qty      = Number.parseInt(req.body?.qty, 10);
-
-  if (![idVeic,idCofre,id_equip,qty].every(Number.isInteger) || qty <= 0)
-    return res.status(400).json({ ok:false, error:'payload_invalido' });
+  const qty = Number.parseInt(req.body?.qty, 10);
+  if (![idVeic, idCofre, id_equip, qty].every(Number.isInteger) || qty <= 0)
+    return res.status(400).json({ ok: false, error: "payload_invalido" });
 
   await db.beginTransaction();
   try {
     const id_local_cofre = await getCofreLocalId(idVeic, idCofre);
-    if (!id_local_cofre) throw new Error('cofre_nao_encontrado');
-
-    const [[equip]] = await db.query(
-      `SELECT id_secao FROM equipamento WHERE id_equip=?`,
-      [id_equip]
-    );
-    if (!equip?.id_secao) throw new Error('equipamento_nao_encontrado');
-
+    if (!id_local_cofre) throw new Error("cofre_nao_encontrado");
+    const [[equip]] = await db.query(`SELECT id_secao FROM equipamento WHERE id_equip=?`, [id_equip]);
+    if (!equip?.id_secao) throw new Error("equipamento_nao_encontrado");
     const id_local_armazem = await getLocArmazemIdBySecao(equip.id_secao);
-    if (!id_local_armazem) throw new Error('armazem_secao_nao_encontrado');
+    if (!id_local_armazem) throw new Error("armazem_secao_nao_encontrado");
 
     await ensureSaldoRow(id_local_armazem, id_equip);
-    await ensureSaldoRow(id_local_cofre,   id_equip);
+    await ensureSaldoRow(id_local_cofre, id_equip);
 
     const disponivel = await getQtyForUpdate(id_local_armazem, id_equip);
     if (qty > disponivel) throw new Error(`sem_stock_armazem:${disponivel}`);
@@ -251,37 +303,31 @@ app.post('/veiculo/:id/cofre/:cofreId/entrada', async (req, res) => {
     );
 
     await db.commit();
-    return res.json({ ok:true });
+    return res.json({ ok: true });
   } catch (e) {
-    await db.rollback().catch(()=>{});
-    return res.status(400).json({ ok:false, error: e.message || 'erro_movimento' });
+    await db.rollback().catch(() => {});
+    return res.status(400).json({ ok: false, error: e.message || "erro_movimento" });
   }
 });
 
-app.post('/veiculo/:id/cofre/:cofreId/saida', async (req, res) => {
-  const idVeic   = Number.parseInt(req.params.id, 10);
-  const idCofre  = Number.parseInt(req.params.cofreId, 10);
+app.post("/veiculo/:id/cofre/:cofreId/saida", async (req, res) => {
+  const idVeic = Number.parseInt(req.params.id, 10);
+  const idCofre = Number.parseInt(req.params.cofreId, 10);
   const id_equip = Number.parseInt(req.body?.id_equip, 10);
-  const qty      = Number.parseInt(req.body?.qty, 10);
-
-  if (![idVeic,idCofre,id_equip,qty].every(Number.isInteger) || qty <= 0)
-    return res.status(400).json({ ok:false, error:'payload_invalido' });
+  const qty = Number.parseInt(req.body?.qty, 10);
+  if (![idVeic, idCofre, id_equip, qty].every(Number.isInteger) || qty <= 0)
+    return res.status(400).json({ ok: false, error: "payload_invalido" });
 
   await db.beginTransaction();
   try {
     const id_local_cofre = await getCofreLocalId(idVeic, idCofre);
-    if (!id_local_cofre) throw new Error('cofre_nao_encontrado');
-
-    const [[equip]] = await db.query(
-      `SELECT id_secao FROM equipamento WHERE id_equip=?`,
-      [id_equip]
-    );
-    if (!equip?.id_secao) throw new Error('equipamento_nao_encontrado');
-
+    if (!id_local_cofre) throw new Error("cofre_nao_encontrado");
+    const [[equip]] = await db.query(`SELECT id_secao FROM equipamento WHERE id_equip=?`, [id_equip]);
+    if (!equip?.id_secao) throw new Error("equipamento_nao_encontrado");
     const id_local_armazem = await getLocArmazemIdBySecao(equip.id_secao);
-    if (!id_local_armazem) throw new Error('armazem_secao_nao_encontrado');
+    if (!id_local_armazem) throw new Error("armazem_secao_nao_encontrado");
 
-    await ensureSaldoRow(id_local_cofre,   id_equip);
+    await ensureSaldoRow(id_local_cofre, id_equip);
     await ensureSaldoRow(id_local_armazem, id_equip);
 
     const noCofre = await getQtyForUpdate(id_local_cofre, id_equip);
@@ -297,14 +343,14 @@ app.post('/veiculo/:id/cofre/:cofreId/saida', async (req, res) => {
     );
 
     await db.commit();
-    return res.json({ ok:true });
+    return res.json({ ok: true });
   } catch (e) {
-    await db.rollback().catch(()=>{});
-    return res.status(400).json({ ok:false, error: e.message || 'erro_movimento' });
+    await db.rollback().catch(() => {});
+    return res.status(400).json({ ok: false, error: e.message || "erro_movimento" });
   }
 });
 
-// ========================= Secção (Material) =========================
+/* ========================= Secção (Material) ========================= */
 app.get("/secao/:nome/catalogo", async (req, res) => {
   try {
     const [rows] = await db.query(
@@ -315,7 +361,9 @@ app.get("/secao/:nome/catalogo", async (req, res) => {
       [req.params.nome]
     );
     res.json(rows);
-  } catch (e) { res.status(500).json({ error:e.message }); }
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.get("/secao/:nome/saldos-armazem", async (req, res) => {
@@ -336,13 +384,15 @@ app.get("/secao/:nome/saldos-armazem", async (req, res) => {
       [id_local]
     );
     res.json(rows);
-  } catch (e) { res.status(500).json({ error:e.message }); }
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.get("/secao/:nome/inventario", async (req, res) => {
   try {
     const id_secao = await getSecaoIdByNome(req.params.nome);
-    if (!id_secao) return res.json({ totais:[], breakdown:[] });
+    if (!id_secao) return res.json({ totais: [], breakdown: [] });
 
     const [totais] = await db.query(
       `SELECT e.nome AS equipamento, CAST(SUM(s.qty) AS UNSIGNED) AS total
@@ -373,14 +423,18 @@ app.get("/secao/:nome/inventario", async (req, res) => {
     );
 
     res.json({ totais, breakdown });
-  } catch (e) { res.status(500).json({ error:e.message }); }
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
-// ========================= Checklists =========================
+/* ========================= PDF Helpers ========================= */
 function fmtPT(d) {
   const dt = new Date(d);
-  const p = n => String(n).padStart(2, "0");
-  return `${p(dt.getDate())}/${p(dt.getMonth() + 1)}/${dt.getFullYear()}, ${p(dt.getHours())}:${p(dt.getMinutes())}:${p(dt.getSeconds())}`;
+  const p = (n) => String(n).padStart(2, "0");
+  return `${p(dt.getDate())}/${p(dt.getMonth() + 1)}/${dt.getFullYear()}, ${p(dt.getHours())}:${p(
+    dt.getMinutes()
+  )}:${p(dt.getSeconds())}`;
 }
 function drawHeader(doc, meta, logoPath = null) {
   const left = 42;
@@ -388,87 +442,33 @@ function drawHeader(doc, meta, logoPath = null) {
   const right = doc.page.width - 42;
 
   if (logoPath) {
-    try { doc.image(logoPath, left, top - 4, { width: 60 }); } catch {}
+    try {
+      doc.image(logoPath, left, top - 4, { width: 60 });
+    } catch {}
   }
 
-  doc.font("Helvetica-Bold").fontSize(16)
-    .text("Checklist de Verificação de Veículo", left, top, { width: right - left, align: "center" });
+  doc.font("Helvetica-Bold").fontSize(16).text("Checklist de Verificação de Veículo", left, top, {
+    width: right - left,
+    align: "center",
+  });
 
   doc.moveDown(0.6);
   doc.font("Helvetica").fontSize(10);
   const lh = 14;
   let y = top + 28;
-  doc.text(`ID: ${meta.id}`, left, y);          y += lh;
+  doc.text(`ID: ${meta.id}`, left, y);           y += lh;
   doc.text(`Veículo: ${meta.veiculo}`, left, y); y += lh;
   doc.text(`Data: ${fmtPT(meta.created_at)}`, left, y); y += lh;
   if (meta.autor || meta.autor_apelido) {
-    doc.text(`Responsável: ${(meta.autor || "")} ${(meta.autor_apelido || "")}`.trim(), left, y); y += lh;
+    doc.text(`Responsável: ${(meta.autor || "")} ${(meta.autor_apelido || "")}`.trim(), left, y);
+    y += lh;
   }
-
   const sepY = y + 6;
   doc.moveTo(left, sepY).lineTo(right, sepY).lineWidth(0.7).strokeColor("#444").stroke();
   return sepY + 12;
 }
-function drawFooter(doc) {
-  const { width, height } = doc.page;
-  doc.font("Helvetica").fontSize(9).fillColor("#666")
-    .text(`Página ${doc.page.number}`, 42, height - 36, { width: width - 84, align: "right" });
-}
-function drawTable(doc, { x = 42, y, columns, rows, rowHeight = 22, zebra = true }, onNewPage) {
-  const pageBottom = doc.page.height - 72;
-  const colX = [];
-  let acc = x;
-  for (const c of columns) { colX.push(acc); acc += c.width; }
-  const tableWidth = columns.reduce((s, c) => s + c.width, 0);
 
-  const paintHeader = (y0) => {
-    doc.save();
-    doc.rect(x, y0, tableWidth, rowHeight).fill("#f0f2f5").restore();
-    doc.lineWidth(0.7).strokeColor("#d1d5db")
-      .moveTo(x, y0 + rowHeight).lineTo(x + tableWidth, y0 + rowHeight).stroke();
-    columns.forEach((c, i) => {
-      const tx = colX[i] + (c.paddingLeft ?? 8);
-      const tw = c.width - (c.paddingLeft ?? 8) - (c.paddingRight ?? 8);
-      doc.font("Helvetica-Bold").fontSize(10).fillColor("#111827")
-        .text(c.header, tx, y0 + 6, { width: tw, ellipsis: true });
-    });
-  };
-
-  paintHeader(y);
-  let cursorY = y + rowHeight;
-
-  for (let idx = 0; idx < rows.length; idx++) {
-    const r = rows[idx];
-
-    if (cursorY + rowHeight > pageBottom) {
-      drawFooter(doc);
-      doc.addPage();
-      const newY = onNewPage?.() ?? 36;
-      paintHeader(newY);
-      cursorY = newY + rowHeight;
-    }
-
-    if (zebra && idx % 2 === 0) {
-      doc.save();
-      doc.rect(x, cursorY, tableWidth, rowHeight).fill("#fafafa").restore();
-    }
-
-    columns.forEach((c, i) => {
-      const tx = colX[i] + (c.paddingLeft ?? 8);
-      const tw = c.width - (c.paddingLeft ?? 8) - (c.paddingRight ?? 8);
-      const val = typeof c.accessor === "function" ? c.accessor(r) : r[c.accessor];
-      doc.font("Helvetica").fontSize(10).fillColor("#0f172a")
-        .text(String(val ?? ""), tx, cursorY + 6, { width: tw, ellipsis: true });
-    });
-
-    doc.lineWidth(0.5).strokeColor("#e5e7eb")
-      .moveTo(x, cursorY + rowHeight).lineTo(x + tableWidth, cursorY + rowHeight).stroke();
-
-    cursorY += rowHeight;
-  }
-
-  return cursorY;
-}
+/* ======= PDF: geração corrigida ======= */
 async function gerarPdfChecklist(chkId, cab, linhas) {
   const filename = `checklist_${chkId}.pdf`;
   const filepath = path.join(STORAGE_DIR, filename);
@@ -477,9 +477,9 @@ async function gerarPdfChecklist(chkId, cab, linhas) {
     const doc = new PDFDocument({
       size: "A4",
       margins: { top: 36, left: 42, right: 42, bottom: 48 },
-      bufferPages: true,
-      autoFirstPage: true,
-      compress: true
+      autoFirstPage: false,
+      bufferPages: true,            // <- importante
+      compress: true,
     });
 
     const out = fs.createWriteStream(filepath);
@@ -487,23 +487,126 @@ async function gerarPdfChecklist(chkId, cab, linhas) {
     out.on("error", reject);
     doc.pipe(out);
 
-    let yStart = drawHeader(doc, cab);
-
-    const columns = [
-      { header: "Cofre",       accessor: "cofre",       width: 90 },
-      { header: "Equipamento", accessor: "equipamento", width: 230 },
-      { header: "Pres.",       accessor: r => r.presente ?? 0, width: 60, paddingLeft: 8, paddingRight: 8 },
-      { header: "Falta",       accessor: r => r.falta    ?? 0, width: 60, paddingLeft: 8, paddingRight: 8 },
-      { header: "Manut.",      accessor: r => r.manutencao ?? 0, width: 70, paddingLeft: 8, paddingRight: 8 },
+    const cols = [
+      { header: "Cofre",        accessor: "cofre",        width: 100, padL: 8, padR: 8 },
+      { header: "Equipamento",  accessor: "equipamento",  width: 270, padL: 8, padR: 8 },
+      { header: "Pres.",        accessor: r => r.presente ?? 0,    width: 60, padL: 8, padR: 8, align: "right" },
+      { header: "Falta",        accessor: r => r.falta ?? 0,       width: 60, padL: 8, padR: 8, align: "right" },
+      { header: "Manut.",       accessor: r => r.manutencao ?? 0,  width: 70, padL: 8, padR: 8, align: "right" },
     ];
 
-    drawTable(
-      doc,
-      { x: 42, y: yStart, columns, rows: linhas, rowHeight: 22, zebra: true },
-      () => drawHeader(doc, cab)
-    );
+    const headerH = 22;
+    let pageNum = 0;
 
-    drawFooter(doc);
+    // helpers que dependem da página atual (só usar após addPage)
+    const left = () => doc.page.margins.left;
+    const right = () => doc.page.width - doc.page.margins.right;
+    const usableBottom = () => doc.page.height - doc.page.margins.bottom - 2;
+
+    function newPage() {
+      doc.addPage();
+      pageNum += 1;
+      return drawHeader(doc, cab); // devolve y inicial para a tabela
+    }
+
+    function paintHeaderRow(y0) {
+      const x = left();
+      const tableW = cols.reduce((s, c) => s + c.width, 0);
+      doc.save();
+      doc.rect(x, y0, tableW, headerH).fill("#f0f2f5").restore();
+      doc.lineWidth(0.7).strokeColor("#d1d5db")
+        .moveTo(x, y0 + headerH).lineTo(x + tableW, y0 + headerH).stroke();
+
+      let acc = x;
+      cols.forEach(c => {
+        const tx = acc + c.padL;
+        const tw = c.width - c.padL - c.padR;
+        doc.font("Helvetica-Bold").fontSize(10).fillColor("#111827")
+          .text(c.header, tx, y0 + 6, { width: tw, ellipsis: true });
+        acc += c.width;
+      });
+    }
+
+    function drawTable(rows, yStart) {
+      // calcular X de cada coluna agora que já existe página
+      const xs = [];
+      {
+        const x0 = left();
+        xs.push(x0);
+        for (let i = 1; i < cols.length; i++) xs.push(xs[i - 1] + cols[i - 1].width);
+      }
+      const tableW = cols.reduce((s, c) => s + c.width, 0);
+
+      function measureRowHeight(row) {
+        let maxH = 0;
+        cols.forEach(c => {
+          const val = typeof c.accessor === "function" ? c.accessor(row) : row[c.accessor];
+          const str = String(val ?? "");
+          const width = c.width - c.padL - c.padR;
+          doc.font("Helvetica").fontSize(10);
+          const h = doc.heightOfString(str, { width, align: c.align || "left" });
+          maxH = Math.max(maxH, h);
+        });
+        return Math.max(22, Math.ceil(maxH) + 12); // 6 top + 6 bottom
+      }
+
+      let y = yStart;
+      paintHeaderRow(y);
+      y += headerH;
+
+      rows.forEach((r, idx) => {
+        const rowH = measureRowHeight(r);
+
+        // quebra ANTES de desenhar a linha
+        if (y + rowH > usableBottom()) {
+          const ny = newPage();
+          paintHeaderRow(ny);
+          y = ny + headerH;
+        }
+
+        // zebra
+        if (idx % 2 === 0) {
+          doc.save();
+          doc.rect(left(), y, tableW, rowH).fill("#fafafa").restore();
+        }
+
+        // células
+        cols.forEach((c, i) => {
+          const tx = xs[i] + c.padL;
+          const tw = c.width - c.padL - c.padR;
+          const val = typeof c.accessor === "function" ? c.accessor(r) : r[c.accessor];
+          doc.font("Helvetica").fontSize(10).fillColor("#0f172a")
+            .text(String(val ?? ""), tx, y + 6, {
+              width: tw,
+              align: c.align || "left",
+              ellipsis: false, // wrap completo
+            });
+        });
+
+        // separador
+        doc.lineWidth(0.5).strokeColor("#e5e7eb")
+          .moveTo(left(), y + rowH).lineTo(left() + tableW, y + rowH).stroke();
+
+        y += rowH;
+      });
+    }
+
+    // fluxo principal: páginas + conteúdo (sem rodapés agora)
+    const yStart = newPage();
+    drawTable(linhas, yStart);
+
+    // === Rodapés no fim, sobre TODAS as páginas (sem criar páginas novas) ===
+    const range = doc.bufferedPageRange(); // { start, count }
+    for (let i = 0; i < range.count; i++) {
+      doc.switchToPage(range.start + i);
+      const { width, height, margins } = doc.page;
+      doc.font("Helvetica").fontSize(9).fillColor("#666")
+        .text(`Página ${i + 1}`, margins.left, height - 36, {
+          width: width - margins.left - margins.right,
+          align: "right",
+        });
+    }
+
     doc.end();
   });
 
@@ -515,13 +618,14 @@ async function gerarPdfChecklist(chkId, cab, linhas) {
   return filepath;
 }
 
-// POST /checklists (manutencao = quantidade; inop nasce 0)
-app.post('/checklists', requireAuth, async (req, res) => {
+
+/* ========================= Checklists ========================= */
+app.post("/checklists", requireAuth, async (req, res) => {
   const id_veiculo = Number.parseInt(req.body?.id_veiculo, 10);
-  const observacoes = (req.body?.observacoes || '').toString().slice(0,500);
+  const observacoes = (req.body?.observacoes || "").toString().slice(0, 500);
   const itens = Array.isArray(req.body?.itens) ? req.body.itens : [];
   if (!Number.isInteger(id_veiculo) || itens.length === 0) {
-    return res.status(400).json({ ok:false, error:'invalid_payload' });
+    return res.status(400).json({ ok: false, error: "invalid_payload" });
   }
 
   await db.beginTransaction();
@@ -536,23 +640,26 @@ app.post('/checklists', requireAuth, async (req, res) => {
     for (const it of itens) {
       const id_cofre = Number.parseInt(it.id_cofre, 10);
       const id_equip = Number.parseInt(it.id_equip, 10);
-      if (![id_cofre, id_equip].every(Number.isInteger)) throw new Error('id_cofre/id_equip inválidos');
+      if (![id_cofre, id_equip].every(Number.isInteger))
+        throw new Error("id_cofre/id_equip inválidos");
 
       const id_local = await getCofreLocalId(id_veiculo, id_cofre);
-      if (!id_local) throw new Error('cofre/localização não encontrado');
+      if (!id_local) throw new Error("cofre/localização não encontrado");
 
-      const p = Math.max(0, Number(it.presente   ?? 0));
-      const f = Math.max(0, Number(it.falta      ?? 0));
+      const p = Math.max(0, Number(it.presente ?? 0));
+      const f = Math.max(0, Number(it.falta ?? 0));
       const m = Math.max(0, Number(it.manutencao ?? 0));
 
       const k = `${id_local}:${id_equip}`;
-      const cur = agg.get(k) || { p:0, f:0, i:0, m:0, id_local, id_equip };
-      cur.p += p; cur.f += f; cur.m += m;   // i (inop) nasce 0 aqui
+      const cur = agg.get(k) || { p: 0, f: 0, i: 0, m: 0, id_local, id_equip };
+      cur.p += p;
+      cur.f += f;
+      cur.m += m;
       agg.set(k, cur);
     }
 
-    const rows = [...agg.values()].map(x => [chkId, x.id_local, x.id_equip, x.p, x.f, 0 /*inop*/, x.m]);
-    if (rows.length === 0) throw new Error('sem linhas');
+    const rows = [...agg.values()].map((x) => [chkId, x.id_local, x.id_equip, x.p, x.f, 0, x.m]);
+    if (rows.length === 0) throw new Error("sem linhas");
 
     await db.query(
       `INSERT INTO checklist_item (id_checklist, id_local, id_equip, presente, falta, inop, manutencao) VALUES ?`,
@@ -584,38 +691,45 @@ app.post('/checklists', requireAuth, async (req, res) => {
     );
     await gerarPdfChecklist(chkId, cab, rowsForPdf);
 
-    res.json({ ok:true, id: chkId, pdf: `/checklists/${chkId}/pdf` });
+    res.json({ ok: true, id: chkId, pdf: `/checklists/${chkId}/pdf` });
   } catch (e) {
-    await db.rollback().catch(()=>{});
-    console.error('ERRO /checklists:', e);
-    res.status(400).json({ ok:false, error: e.message });
+    await db.rollback().catch(() => {});
+    console.error("ERRO /checklists:", e);
+    res.status(400).json({ ok: false, error: e.message });
   }
 });
 
-// GET /checklists (listagem)
-app.get('/checklists', requireAuth, async (req, res) => {
+app.get("/checklists", requireAuth, async (req, res) => {
   const { from, to } = req.query;
-  const idV = req.query.id_veiculo ? Number.parseInt(req.query.id_veiculo,10) : null;
+  const idV = req.query.id_veiculo ? Number.parseInt(req.query.id_veiculo, 10) : null;
   const where = [];
   const params = [];
-  if (from) { where.push('c.created_at >= ?'); params.push(from + ' 00:00:00'); }
-  if (to)   { where.push('c.created_at <= ?'); params.push(to   + ' 23:59:59'); }
-  if (idV)  { where.push('c.id_veiculo = ?');  params.push(idV); }
+  if (from) {
+    where.push("c.created_at >= ?");
+    params.push(from + " 00:00:00");
+  }
+  if (to) {
+    where.push("c.created_at <= ?");
+    params.push(to + " 23:59:59");
+  }
+  if (idV) {
+    where.push("c.id_veiculo = ?");
+    params.push(idV);
+  }
   const sql = `SELECT c.id, c.created_at, c.closed_at, c.status, v.codigo AS veiculo, b.nome AS autor
                FROM checklist c
                JOIN veiculo v ON v.id_veiculo = c.id_veiculo
                JOIN bombeiro b ON b.id = c.id_bombeiro
-               ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+               ${where.length ? "WHERE " + where.join(" AND ") : ""}
                ORDER BY c.created_at DESC
                LIMIT 200`;
   const [rows] = await db.query(sql, params);
   res.json(rows);
 });
 
-// GET /checklists/:id (detalhe)
-app.get('/checklists/:id', requireAuth, async (req, res) => {
-  const id = Number.parseInt(req.params.id,10);
-  if (!Number.isInteger(id)) return res.status(400).json({ ok:false, error:'invalid_id' });
+app.get("/checklists/:id", requireAuth, async (req, res) => {
+  const id = Number.parseInt(req.params.id, 10);
+  if (!Number.isInteger(id)) return res.status(400).json({ ok: false, error: "invalid_id" });
 
   const [[cab]] = await db.query(
     `SELECT c.id, c.created_at, c.closed_at, c.observacoes, c.status, c.pdf_path,
@@ -626,7 +740,7 @@ app.get('/checklists/:id', requireAuth, async (req, res) => {
       WHERE c.id=?`,
     [id]
   );
-  if (!cab) return res.status(404).json({ ok:false, error:'not_found' });
+  if (!cab) return res.status(404).json({ ok: false, error: "not_found" });
 
   const [itens] = await db.query(
     `SELECT e.nome AS equipamento, e.unidade, c.nome AS cofre,
@@ -643,10 +757,12 @@ app.get('/checklists/:id', requireAuth, async (req, res) => {
   res.json({ ...cab, itens });
 });
 
-// GET /checklists/:id/pdf
-app.get('/checklists/:id/pdf', requireAuth, async (req, res) => {
-  const id = Number.parseInt(req.params.id,10);
-  if (!Number.isInteger(id)) return res.status(400).json({ ok:false, error:'invalid_id' });
+/* ===== PDF com regen e no-cache ===== */
+app.get("/checklists/:id/pdf", requireAuth, async (req, res) => {
+  const id = Number.parseInt(req.params.id, 10);
+  if (!Number.isInteger(id)) return res.status(400).json({ ok: false, error: "invalid_id" });
+
+  const force = req.query.regen === "1";
 
   const [[cab]] = await db.query(
     `SELECT c.id, c.created_at, c.closed_at, c.observacoes, c.pdf_path,
@@ -657,17 +773,23 @@ app.get('/checklists/:id/pdf', requireAuth, async (req, res) => {
       WHERE c.id=?`,
     [id]
   );
-  if (!cab) return res.status(404).json({ ok:false, error:'not_found' });
+  if (!cab) return res.status(404).json({ ok: false, error: "not_found" });
 
   const filename = cab.pdf_path || `checklist_${id}.pdf`;
   const filepath = path.join(STORAGE_DIR, filename);
 
-  try {
-    await fsp.access(filepath, fs.constants.R_OK);
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `inline; filename=${path.basename(filename)}`);
-    return fs.createReadStream(filepath).pipe(res);
-  } catch {}
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+
+  if (!force) {
+    try {
+      await fsp.access(filepath, fs.constants.R_OK);
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename=${path.basename(filename)}`);
+      return fs.createReadStream(filepath).pipe(res);
+    } catch {}
+  }
 
   const [rows] = await db.query(
     `SELECT e.nome AS equipamento, e.unidade, c.nome AS cofre,
@@ -682,174 +804,178 @@ app.get('/checklists/:id/pdf', requireAuth, async (req, res) => {
   );
 
   const regeneratedPath = await gerarPdfChecklist(id, cab, rows);
-  res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader('Content-Disposition', `inline; filename=${path.basename(regeneratedPath)}`);
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `inline; filename=${path.basename(regeneratedPath)}`);
   return fs.createReadStream(regeneratedPath).pipe(res);
 });
 
-// ========================= LOGIN / ME / LOGOUT =========================
-app.post('/login', loginLimiter, async (req, res) => {
-  try {
-    const { username, password } = req.body ?? {};
-    if (!username || !password) return res.status(400).json({ ok:false, error: 'missing_fields' });
-    const [rows] = await db.query('SELECT id, nome, apelido, graduacao, username, password_hash FROM bombeiro WHERE username = ?', [username]);
-    if (rows.length === 0) return res.status(401).json({ ok:false, error: 'invalid_credentials' });
-    const user = rows[0];
-    const ok = await bcrypt.compare(password, user.password_hash);
-    if (!ok) return res.status(401).json({ ok:false, error: 'invalid_credentials' });
-    const token = signToken(user); setAuthCookie(res, token);
-    const { id, nome, apelido, graduacao } = user;
-    res.json({ ok:true, user: { id, nome, apelido, graduacao, username } });
-  } catch (e) { console.error(e); res.status(500).json({ ok:false, error: 'server_error' }); }
-});
-app.get('/me', requireAuth, (req, res) => { res.json({ ok: true, user: req.user }); });
-app.post('/logout', (_req, res) => { clearAuthCookie(res); res.json({ ok: true }); });
-
-// ========================= REPOSIÇÃO (ACUMULADO) =========================
-app.get('/reposicao', requireAuth, async (req, res) => {
-  try {
-    const idV = req.query.id_veiculo ? Number.parseInt(req.query.id_veiculo, 10) : null;
-    const where = ['c.status = \'closed\''];
-    const params = [];
-
-    if (idV) { where.push('c.id_veiculo = ?'); params.push(idV); }
-
-    const sql = `
-      SELECT 
-        v.id_veiculo,
-        v.codigo               AS veiculo,
-        cof.id_cofre,
-        cof.nome               AS cofre,
-        e.id_equip,
-        e.nome                 AS equipamento,
-        CAST(SUM(chki.falta) AS UNSIGNED)      AS falta,
-        CAST(SUM(chki.inop)  AS UNSIGNED)      AS inop,
-        CAST(SUM(chki.manutencao) AS UNSIGNED) AS manutencao,
-        MAX(c.created_at)                      AS last_seen
-      FROM checklist_item chki
-      JOIN checklist   c   ON c.id = chki.id_checklist
-      JOIN localizacao l   ON l.id_local = chki.id_local AND l.tipo='COFRE'
-      JOIN veiculo     v   ON v.id_veiculo = c.id_veiculo
-      JOIN cofre       cof ON cof.id_cofre = l.id_cofre
-      JOIN equipamento e   ON e.id_equip = chki.id_equip
-      WHERE ${where.join(' AND ')}
-        AND (chki.falta > 0 OR chki.inop > 0 OR chki.manutencao > 0)
-      GROUP BY v.id_veiculo, cof.id_cofre, e.id_equip
-      HAVING (SUM(chki.falta) > 0 OR SUM(chki.inop) > 0 OR SUM(chki.manutencao) > 0)
-      ORDER BY v.codigo, cof.nome, e.nome
-    `;
-
-    const [rows] = await db.query(sql, params);
-    return res.json(rows);
-  } catch (e) {
-    console.error('ERRO /reposicao (acumulado):', e);
-    return res.status(500).json({ ok:false, error: e.message || 'server_error' });
-  }
+/* ========================= REGISTER / LOGIN / ME / LOGOUT ========================= */
+const registerLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
 });
 
-// ====== DECISÃO DE MANUTENÇÃO (INOP / REPOR) COM QUANTIDADE E ORIGEM ======
-app.post('/reposicao/decidir', requireAuth, async (req, res) => {
-  const { id_veiculo, id_cofre, id_equip, decidir, qty, from } = req.body || {};
-  if (!['inop','repor'].includes(decidir))
-    return res.status(400).json({ ok:false, error:'decisao_invalida' });
-
-  const idV = Number.parseInt(id_veiculo, 10);
-  const idC = Number.parseInt(id_cofre,   10);
-  const idE = Number.parseInt(id_equip,   10);
-  const q   = Number.parseInt(qty, 10);
-
-  if (![idV,idC,idE].every(Number.isInteger))
-    return res.status(400).json({ ok:false, error:'payload_invalido' });
-  if (!Number.isInteger(q) || q <= 0)
-    return res.status(400).json({ ok:false, error:'qty_invalida' });
-
+app.post("/register", registerLimiter, async (req, res) => {
   try {
+    const {
+      nome,
+      apelido,
+      username,
+      password,
+      graduacao,
+      piquete,
+      funcoes,
+    } = req.body || {};
+
+    if (![nome, apelido, username, password].every(v => typeof v === "string" && v.trim())) {
+      return res.status(400).json({ ok: false, error: "missing_fields" });
+    }
+    if (password.length < 4) {
+      return res.status(400).json({ ok: false, error: "weak_password" });
+    }
+
+    const nomeLimpo = nome.trim();
+    const apelidoLimpo = apelido.trim();
+    const usernameLimpo = username.trim().toLowerCase();
+    const graduacaoStr = (graduacao || "").toString().trim();
+    const piqueteStr = (piquete || "").toString().trim();
+    const funcoesArr = Array.isArray(funcoes) ? funcoes.filter(f => !!f && String(f).trim()) : [];
+
+    const hash = await bcrypt.hash(password, 10);
+
     await db.beginTransaction();
 
-    const id_local = await getCofreLocalId(idV, idC);
-    if (!id_local) throw new Error('cofre_nao_encontrado');
-
-    if (decidir === 'inop') {
-      // move Manutenção -> INOP (capado à manutencao atual)
-      const [[row]] = await db.query(
-        `SELECT chki.id_checklist, chki.manutencao
-           FROM checklist_item chki
-           JOIN checklist c ON c.id = chki.id_checklist
-          WHERE c.id_veiculo = ?
-            AND chki.id_local = ?
-            AND chki.id_equip = ?
-            AND chki.manutencao > 0
-          ORDER BY c.created_at DESC
-          LIMIT 1`,
-        [idV, id_local, idE]
+    let insertId;
+    try {
+      const [ins] = await db.query(
+        `INSERT INTO bombeiro (nome, apelido, nome_completo, graduacao, piquete, username, password_hash)
+         VALUES (?, ?, TRIM(CONCAT(?, ' ', ?)), ?, ?, ?, ?)`,
+        [nomeLimpo, apelidoLimpo, nomeLimpo, apelidoLimpo, graduacaoStr, piqueteStr, usernameLimpo, hash]
       );
-      if (!row) { await db.rollback(); return res.status(404).json({ ok:false, error:'sem_item_em_manutencao' }); }
+      insertId = ins.insertId;
+    } catch (e) {
+      await db.rollback().catch(() => {});
+      if (e?.code === "ER_DUP_ENTRY") {
+        return res.status(409).json({ ok: false, error: "username_taken" });
+      }
+      throw e;
+    }
 
-      const moveQty = Math.max(0, Math.min(q, row.manutencao));
-      if (moveQty === 0) { await db.rollback(); return res.status(400).json({ ok:false, error:'qty_zero_ou_maior_que_manutencao' }); }
+    for (const raw of funcoesArr) {
+      const nomeFunc = String(raw).trim();
+      if (!nomeFunc) continue;
+
+      const [insF] = await db.query(
+        `INSERT INTO funcao (nome) VALUES (?)
+         ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)`,
+        [nomeFunc]
+      );
+      const idFunc = insF.insertId;
 
       await db.query(
-        `UPDATE checklist_item
-            SET inop = inop + ?, 
-                manutencao = manutencao - ?
-          WHERE id_checklist = ? AND id_local = ? AND id_equip = ?`,
-        [moveQty, moveQty, row.id_checklist, id_local, idE]
+        `INSERT IGNORE INTO bombeiro_funcao (id_bombeiro, id_funcao) VALUES (?, ?)`,
+        [insertId, idFunc]
       );
-    } else {
-      // 'repor' com origem opcional: from = 'inop' | 'falta' | 'manutencao'
-      const validFrom = ['inop', 'falta', 'manutencao', undefined, null];
-      if (!validFrom.includes(from)) {
-        await db.rollback();
-        return res.status(400).json({ ok:false, error:'origem_invalida' });
-      }
-
-      // Função auxiliar
-      async function decField(field) {
-        const [[row]] = await db.query(
-          `SELECT chki.id_checklist, chki.${field} AS val
-             FROM checklist_item chki
-             JOIN checklist c ON c.id = chki.id_checklist
-            WHERE c.id_veiculo = ?
-              AND chki.id_local = ?
-              AND chki.id_equip = ?
-              AND chki.${field} > 0
-            ORDER BY c.created_at DESC
-            LIMIT 1`,
-          [idV, id_local, idE]
-        );
-        if (!row) return false;
-        const useQty = Math.max(0, Math.min(q, row.val));
-        if (useQty === 0) return false;
-        await db.query(
-          `UPDATE checklist_item
-              SET ${field} = ${field} - ?
-            WHERE id_checklist = ? AND id_local = ? AND id_equip = ?`,
-          [useQty, row.id_checklist, id_local, idE]
-        );
-        return true;
-      }
-
-      if (from) {
-        // Repor apenas da origem escolhida
-        const ok = await decField(from);
-        if (!ok) { await db.rollback(); return res.status(400).json({ ok:false, error:`nada_para_repor_em_${from}` }); }
-      } else {
-        // Sem origem: prioridade INOP > FALTA > MANUTENCAO
-        let ok = await decField('inop');
-        if (!ok) ok = await decField('falta');
-        if (!ok) ok = await decField('manutencao');
-        if (!ok) { await db.rollback(); return res.status(404).json({ ok:false, error:'nada_para_repor' }); }
-      }
     }
 
     await db.commit();
-    return res.json({ ok:true });
+
+    const isAdmin = await isUserAdmin(insertId);
+
+    const token = signToken({
+      id: insertId,
+      username: usernameLimpo,
+      nome: nomeLimpo,
+      apelido: apelidoLimpo,
+      graduacao: graduacaoStr,
+    });
+    setAuthCookie(res, token);
+
+    return res.json({
+      ok: true,
+      user: {
+        id: insertId,
+        username: usernameLimpo,
+        nome: nomeLimpo,
+        apelido: apelidoLimpo,
+        graduacao: graduacaoStr,
+        isAdmin,
+      },
+    });
   } catch (e) {
-    await db.rollback().catch(()=>{});
-    console.error('POST /reposicao/decidir', e);
-    return res.status(400).json({ ok:false, error: e.message || 'server_error' });
+    await db.rollback().catch(() => {});
+    console.error("POST /register", e);
+    return res.status(500).json({ ok: false, error: "server_error" });
   }
 });
 
-// ========================= Start =========================
-app.listen(Number(PORT), () => console.log(`Servidor a correr em http://localhost:${PORT}`));
+app.post("/login", loginLimiter, async (req, res) => {
+  try {
+    const { username, password } = req.body ?? {};
+    if (!username || !password)
+      return res.status(400).json({ ok: false, error: "missing_fields" });
+
+    const [rows] = await db.query(
+      `SELECT id, nome, apelido, graduacao, username, password_hash
+         FROM bombeiro
+        WHERE username = ?`,
+      [username]
+    );
+    if (rows.length === 0) return res.status(401).json({ ok: false, error: "invalid_credentials" });
+
+    const user = rows[0];
+    const ok = await bcrypt.compare(password, user.password_hash);
+    if (!ok) return res.status(401).json({ ok: false, error: "invalid_credentials" });
+
+    const token = signToken(user);
+    setAuthCookie(res, token);
+
+    const { id, nome, apelido, graduacao } = user;
+    const isAdmin = await isUserAdmin(id);
+
+    return res.json({
+      ok: true,
+      user: { id, nome, apelido, graduacao, username, isAdmin },
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok: false, error: "server_error" });
+  }
+});
+
+app.get("/me", requireAuth, async (req, res) => {
+  try {
+    const isAdmin = await isUserAdmin(req.user.id);
+    const { id, username, nome, apelido, graduacao } = req.user || {};
+    res.json({
+      ok: true,
+      user: { id, username, nome, apelido, graduacao, isAdmin },
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: "server_error" });
+  }
+});
+
+app.post("/logout", (_req, res) => {
+  clearAuthCookie(res);
+  res.json({ ok: true });
+});
+
+/* ========================= Auth util ========================= */
+app.get("/auth/is-admin", requireAuth, async (req, res) => {
+  try {
+    const isAdmin = await isUserAdmin(req.user.id);
+    console.log("is-admin:", { uid: req.user.id, isAdmin });
+    res.json({ ok: true, isAdmin });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok: false, error: "server_error" });
+  }
+});
+
+/* ========================= Start ========================= */
+app.listen(Number(PORT), () =>
+  console.log(`Servidor a correr em http://localhost:${PORT}`)
+);

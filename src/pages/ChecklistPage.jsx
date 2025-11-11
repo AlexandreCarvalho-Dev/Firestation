@@ -7,9 +7,8 @@ export default function ChecklistPage({ idVeiculo, codigoVeiculo, onBack }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState('');
+  const [sucesso, setSucesso] = useState('');
 
-  // Estado por (cofre:id_equip)
-  // Guardamos: baseQty (da API), falta (int), manutencao (int)
   const [counts, setCounts] = useState({});
   const keyFor = (r) => `${r.id_cofre}:${r.id_equip}`;
 
@@ -57,14 +56,10 @@ export default function ChecklistPage({ idVeiculo, codigoVeiculo, onBack }) {
     setCounts(prev => {
       const cur = prev[k] || { baseQty: Number(r.qty ?? 0), falta: 0, manutencao: 0 };
       const next = fn({ ...cur });
-
-      // clamps: 0 ≤ falta ≤ base; 0 ≤ manutencao; e (falta + manutencao) ≤ base
       next.falta = Math.max(0, Math.min(next.falta, next.baseQty));
       next.manutencao = Math.max(0, next.manutencao | 0);
-
       const totalOut = next.falta + next.manutencao;
       if (totalOut > next.baseQty) {
-        // reduzir preferência em manutencao
         const excesso = totalOut - next.baseQty;
         const tiraMan = Math.min(excesso, next.manutencao);
         next.manutencao -= tiraMan;
@@ -78,12 +73,10 @@ export default function ChecklistPage({ idVeiculo, codigoVeiculo, onBack }) {
   const getPresente = (k) => {
     const c = counts[k];
     if (!c) return 0;
-    // Agora: Presente = base - Falta - Manutenção
     const p = c.baseQty - c.falta - c.manutencao;
     return Math.max(0, Math.min(c.baseQty, p));
   };
 
-  // Payload: { id_cofre, id_equip, presente, falta, manutencao }
   function toItemsPayload() {
     const itens = [];
     for (const r of rows) {
@@ -105,6 +98,7 @@ export default function ChecklistPage({ idVeiculo, codigoVeiculo, onBack }) {
     try {
       setLoading(true);
       setErro('');
+      setSucesso('');
       const body = { id_veiculo: idVeiculo, itens: toItemsPayload() };
       const r = await fetch(`${API_BASE}/checklists`, {
         method: 'POST',
@@ -118,6 +112,10 @@ export default function ChecklistPage({ idVeiculo, codigoVeiculo, onBack }) {
       }
       const data = await r.json();
       window.open(`${API_BASE}/checklists/${data.id}/pdf`, '_blank');
+      setSucesso('Checklist guardada e PDF gerado com sucesso. A voltar para Inventários/Checklists…');
+      setTimeout(() => {
+        onBack && onBack();
+      }, 1200);
     } catch (e) {
       setErro(e.message);
     } finally {
@@ -145,21 +143,21 @@ export default function ChecklistPage({ idVeiculo, codigoVeiculo, onBack }) {
         <h1>{codigoVeiculo || `Veículo #${idVeiculo}`}</h1>
         <button
           className="btn-primary save-btn"
-          id='save'
+          id="save"
           onClick={handleGuardarPDF}
           disabled={rows.length === 0 || loading}
           title="Guardar e gerar PDF"
         >
-          Guardar e PDF
+          {loading ? 'A guardar…' : 'Guardar e PDF'}
         </button>
       </div>
 
-      {erro && <p className="erro">{erro}</p>}
+      {erro && <p className="erro" role="alert">{erro}</p>}
+      {sucesso && <p className="sucesso" role="status" aria-live="polite">{sucesso}</p>}
 
       {porCofre.map(([cofre, linhas]) => (
         <div className="cofre" key={cofre}>
           <h3>{cofre}</h3>
-
           <table className="inv">
             <colgroup>
               <col className="col-material" />
@@ -191,16 +189,10 @@ export default function ChecklistPage({ idVeiculo, codigoVeiculo, onBack }) {
 
                 return (
                   <tr key={k}>
-                    <td>
-                      {r.equipamento} <span className="muted">({r.unidade})</span>
-                    </td>
-
-                    {/* Presente (read-only) */}
+                    <td>{r.equipamento} <span className="muted"></span></td>
                     <td className="num">
                       <input className="qty-input readonly" readOnly value={presente} />
                     </td>
-
-                    {/* Falta */}
                     <td className="num">
                       <div className="stepper">
                         <button type="button" className="step-btn" onClick={decFalta} aria-label="Diminuir falta">−</button>
@@ -208,8 +200,6 @@ export default function ChecklistPage({ idVeiculo, codigoVeiculo, onBack }) {
                         <button type="button" className="step-btn" onClick={incFalta} aria-label="Aumentar falta" disabled={disableIncFalta}>+</button>
                       </div>
                     </td>
-
-                    {/* Manutenção */}
                     <td className="num">
                       <div className="stepper">
                         <button type="button" className="step-btn" onClick={decMan} aria-label="Diminuir manutenção">−</button>

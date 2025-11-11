@@ -4,7 +4,7 @@
   background: #fff;
   min-height: 100vh;
   color: #111;
-  max-width: 420px;
+  min-width: 100vw;
   margin: 0 auto;
   overflow-x: hidden;
   box-sizing: border-box;
