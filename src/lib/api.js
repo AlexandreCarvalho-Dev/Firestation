@@ -29,7 +29,7 @@ export async function apiMe() {
 
 export async function apiIsAdmin() {
   const res = await fetch(`${API_BASE}/auth/is-admin`, { credentials: 'include' });
-  return asJson(res); // { ok:true, isAdmin: boolean }
+  return asJson(res);
 }
 
 export async function apiLogout() {

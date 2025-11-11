@@ -14,10 +14,11 @@ import { fileURLToPath } from "url";
 import "dotenv/config";
 
 const app = express();
+app.set("trust proxy", 1);
 
 const {
   NODE_ENV = "development",
-  CLIENT_ORIGINS = "http://192.168.1.101:5173",
+  CLIENT_ORIGINS = "https://app.bombeirosdealges.pt,http://192.168.1.101:5173",
   JWT_SECRET = "muda-isto",
   DB_HOST = "localhost",
   DB_USER = "root",
@@ -39,10 +40,7 @@ function isLanDevOrigin(origin) {
   try {
     const u = new URL(origin);
     const isHttp = u.protocol === "http:";
-    const isLocal =
-      u.hostname === "localhost" ||
-      u.hostname === "127.0.0.1" ||
-      /^192\.168\.1\.90$/.test(u.hostname);
+    const isLocal = ["localhost","127.0.0.1","192.168.1.101","192.168.1.90"].includes(u.hostname);
     const isPort = u.port === "5173" || u.port === "";
     return isHttp && isLocal && isPort;
   } catch {
@@ -109,39 +107,6 @@ async function ensureSaldoRow(id_local, id_equip) {
     `INSERT IGNORE INTO inventario_saldo (id_local, id_equip, qty) VALUES (?, ?, 0)`,
     [id_local, id_equip]
   );
-}
-async function ensureArmazemLocalBySecaoId(id_secao) {
-  const [[ex]] = await db.query(
-    `SELECT id_local FROM localizacao WHERE tipo='SECAO' AND id_secao=? LIMIT 1`,
-    [id_secao]
-  );
-  if (ex?.id_local) return ex.id_local;
-
-  const [[sec]] = await db.query(`SELECT nome FROM secao WHERE id_secao=?`, [id_secao]);
-  if (!sec?.nome) throw new Error("secao_nao_encontrada");
-
-  const nomeLocal = `Armazém ${sec.nome}`;
-  const [ins] = await db.query(
-    `INSERT INTO localizacao (tipo, id_secao, nome) VALUES ('SECAO', ?, ?)`,
-    [id_secao, nomeLocal]
-  );
-  return ins.insertId;
-}
-async function ensureEquipamentoOnSecao(id_secao, nomeEquip, unidade = "un") {
-  try {
-    const [ins] = await db.query(
-      `INSERT INTO equipamento (nome, unidade, id_secao) VALUES (?,?,?)`,
-      [nomeEquip, unidade, id_secao]
-    );
-    return ins.insertId;
-  } catch (e) {
-    if (e?.code !== "ER_DUP_ENTRY") throw e;
-    const [[r]] = await db.query(
-      `SELECT id_equip FROM equipamento WHERE nome=? AND id_secao=? LIMIT 1`,
-      [nomeEquip, id_secao]
-    );
-    return r?.id_equip || null;
-  }
 }
 
 /* ========================= Auth (JWT) ========================= */
@@ -478,7 +443,7 @@ async function gerarPdfChecklist(chkId, cab, linhas) {
       size: "A4",
       margins: { top: 36, left: 42, right: 42, bottom: 48 },
       autoFirstPage: false,
-      bufferPages: true,            // <- importante
+      bufferPages: true,
       compress: true,
     });
 
@@ -496,17 +461,12 @@ async function gerarPdfChecklist(chkId, cab, linhas) {
     ];
 
     const headerH = 22;
-    let pageNum = 0;
-
-    // helpers que dependem da página atual (só usar após addPage)
     const left = () => doc.page.margins.left;
-    const right = () => doc.page.width - doc.page.margins.right;
     const usableBottom = () => doc.page.height - doc.page.margins.bottom - 2;
 
     function newPage() {
       doc.addPage();
-      pageNum += 1;
-      return drawHeader(doc, cab); // devolve y inicial para a tabela
+      return drawHeader(doc, cab);
     }
 
     function paintHeaderRow(y0) {
@@ -528,13 +488,10 @@ async function gerarPdfChecklist(chkId, cab, linhas) {
     }
 
     function drawTable(rows, yStart) {
-      // calcular X de cada coluna agora que já existe página
       const xs = [];
-      {
-        const x0 = left();
-        xs.push(x0);
-        for (let i = 1; i < cols.length; i++) xs.push(xs[i - 1] + cols[i - 1].width);
-      }
+      const x0 = left();
+      xs.push(x0);
+      for (let i = 1; i < cols.length; i++) xs.push(xs[i - 1] + cols[i - 1].width);
       const tableW = cols.reduce((s, c) => s + c.width, 0);
 
       function measureRowHeight(row) {
@@ -547,7 +504,7 @@ async function gerarPdfChecklist(chkId, cab, linhas) {
           const h = doc.heightOfString(str, { width, align: c.align || "left" });
           maxH = Math.max(maxH, h);
         });
-        return Math.max(22, Math.ceil(maxH) + 12); // 6 top + 6 bottom
+        return Math.max(22, Math.ceil(maxH) + 12);
       }
 
       let y = yStart;
@@ -557,20 +514,17 @@ async function gerarPdfChecklist(chkId, cab, linhas) {
       rows.forEach((r, idx) => {
         const rowH = measureRowHeight(r);
 
-        // quebra ANTES de desenhar a linha
         if (y + rowH > usableBottom()) {
           const ny = newPage();
           paintHeaderRow(ny);
           y = ny + headerH;
         }
 
-        // zebra
         if (idx % 2 === 0) {
           doc.save();
           doc.rect(left(), y, tableW, rowH).fill("#fafafa").restore();
         }
 
-        // células
         cols.forEach((c, i) => {
           const tx = xs[i] + c.padL;
           const tw = c.width - c.padL - c.padR;
@@ -579,11 +533,10 @@ async function gerarPdfChecklist(chkId, cab, linhas) {
             .text(String(val ?? ""), tx, y + 6, {
               width: tw,
               align: c.align || "left",
-              ellipsis: false, // wrap completo
+              ellipsis: false,
             });
         });
 
-        // separador
         doc.lineWidth(0.5).strokeColor("#e5e7eb")
           .moveTo(left(), y + rowH).lineTo(left() + tableW, y + rowH).stroke();
 
@@ -591,12 +544,10 @@ async function gerarPdfChecklist(chkId, cab, linhas) {
       });
     }
 
-    // fluxo principal: páginas + conteúdo (sem rodapés agora)
     const yStart = newPage();
     drawTable(linhas, yStart);
 
-    // === Rodapés no fim, sobre TODAS as páginas (sem criar páginas novas) ===
-    const range = doc.bufferedPageRange(); // { start, count }
+    const range = doc.bufferedPageRange();
     for (let i = 0; i < range.count; i++) {
       doc.switchToPage(range.start + i);
       const { width, height, margins } = doc.page;
@@ -820,13 +771,7 @@ const registerLimiter = rateLimit({
 app.post("/register", registerLimiter, async (req, res) => {
   try {
     const {
-      nome,
-      apelido,
-      username,
-      password,
-      graduacao,
-      piquete,
-      funcoes,
+      nome, apelido, username, password, graduacao, piquete, funcoes,
     } = req.body || {};
 
     if (![nome, apelido, username, password].every(v => typeof v === "string" && v.trim())) {
@@ -963,7 +908,6 @@ app.post("/logout", (_req, res) => {
   res.json({ ok: true });
 });
 
-/* ========================= Auth util ========================= */
 app.get("/auth/is-admin", requireAuth, async (req, res) => {
   try {
     const isAdmin = await isUserAdmin(req.user.id);
@@ -976,6 +920,6 @@ app.get("/auth/is-admin", requireAuth, async (req, res) => {
 });
 
 /* ========================= Start ========================= */
-app.listen(Number(PORT), () =>
-  console.log(`Servidor a correr em http://localhost:${PORT}`)
-);
+app.listen(Number(PORT), () => {
+  console.log(`API a correr em http://127.0.0.1:${PORT} (NODE_ENV=${NODE_ENV})`);
+});
