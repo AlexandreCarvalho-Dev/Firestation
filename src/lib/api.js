@@ -1,5 +1,5 @@
 // src/lib/api.js
-export const API_BASE = `http://${window.location.hostname}:3001`;
+export const API_BASE = import.meta.env.PROD ? '/api' : 'http://192.168.1.101:3001';
 
 async function asJson(res) {
   const data = await res.json().catch(() => ({}));
