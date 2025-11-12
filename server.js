@@ -76,6 +76,55 @@ const db = await mysql.createConnection({
   multipleStatements: false,
 });
 
+async function getSecaoPools(id_secao) {
+  const [rows] = await db.query(
+    `SELECT id_local, tipo
+       FROM localizacao
+      WHERE id_secao=? AND tipo IN ('SECAO','SECAO_MAN','SECAO_INOP')`,
+    [id_secao]
+  );
+  const by = Object.fromEntries(rows.map(r => [r.tipo, r.id_local]));
+  return { id_SECAO: by.SECAO || null, id_MAN: by.SECAO_MAN || null, id_INOP: by.SECAO_INOP || null };
+}
+
+async function ensureSecaoPools(id_secao) {
+  // lê existentes
+  const [rows] = await db.query(
+    `SELECT id_local, tipo FROM localizacao
+      WHERE id_secao=? AND tipo IN ('SECAO','SECAO_MAN','SECAO_INOP')`,
+    [id_secao]
+  );
+  const by = Object.fromEntries(rows.map(r => [r.tipo, r.id_local]));
+  let id_SECAO = by.SECAO || null;
+  let id_MAN   = by.SECAO_MAN || null;
+  let id_INOP  = by.SECAO_INOP || null;
+
+  if (!id_SECAO) {
+    const [ins] = await db.query(
+      `INSERT INTO localizacao (tipo, id_secao, nome) VALUES ('SECAO', ?, 'Armazém')`,
+      [id_secao]
+    );
+    id_SECAO = ins.insertId;
+  }
+  if (!id_MAN) {
+    const [ins] = await db.query(
+      `INSERT INTO localizacao (tipo, id_secao, nome) VALUES ('SECAO_MAN', ?, 'Armazém (Manut.)')`,
+      [id_secao]
+    );
+    id_MAN = ins.insertId;
+  }
+  if (!id_INOP) {
+    const [ins] = await db.query(
+      `INSERT INTO localizacao (tipo, id_secao, nome) VALUES ('SECAO_INOP', ?, 'Armazém (INOP)')`,
+      [id_secao]
+    );
+    id_INOP = ins.insertId;
+  }
+  return { id_SECAO, id_MAN, id_INOP };
+}
+
+
+
 /* ========================= Helpers DB ========================= */
 async function getSecaoIdByNome(nome) {
   const [r] = await db.query("SELECT id_secao FROM secao WHERE nome=?", [nome]);
@@ -108,6 +157,19 @@ async function ensureSaldoRow(id_local, id_equip) {
     [id_local, id_equip]
   );
 }
+
+async function resolveSecaoIdForCofreEquip(id_local_cofre, id_equip) {
+  const [[row]] = await db.query(
+    `SELECT COALESCE(l.id_secao, e.id_secao) AS id_secao
+       FROM localizacao l
+       LEFT JOIN equipamento e ON e.id_equip = ?
+      WHERE l.id_local = ?
+      LIMIT 1`,
+    [id_equip, id_local_cofre]
+  );
+  return row?.id_secao ?? null;
+}
+
 
 /* ========================= Auth (JWT) ========================= */
 const JWT_EXPIRES = "7d";
@@ -374,39 +436,80 @@ app.get("/secao/:nome/inventario", async (req, res) => {
     const id_secao = await getSecaoIdByNome(req.params.nome);
     if (!id_secao) return res.json({ totais: [], breakdown: [] });
 
+    const { id_SECAO, id_MAN, id_INOP } = await ensureSecaoPools(id_secao);
+
+    // Totais por equipamento (normal, manut, inop)
     const [totais] = await db.query(
-      `SELECT e.nome AS equipamento, CAST(SUM(s.qty) AS UNSIGNED) AS total
-         FROM inventario_saldo s
-         JOIN localizacao l ON l.id_local = s.id_local
-         JOIN equipamento  e ON e.id_equip = s.id_equip
-        WHERE l.id_secao = ?
-        GROUP BY e.id_equip, e.nome
-        ORDER BY e.nome`,
-      [id_secao]
+      `
+      SELECT
+        e.id_equip,
+        e.nome AS equipamento,
+        e.unidade,
+        CAST(SUM(CASE WHEN s.id_local = ? THEN s.qty ELSE 0 END) AS UNSIGNED) AS total_normal,
+        CAST(SUM(CASE WHEN s.id_local = ? THEN s.qty ELSE 0 END) AS UNSIGNED) AS total_manut,
+        CAST(SUM(CASE WHEN s.id_local = ? THEN s.qty ELSE 0 END) AS UNSIGNED) AS total_inop
+      FROM equipamento e
+      LEFT JOIN inventario_saldo s
+             ON s.id_equip = e.id_equip
+      LEFT JOIN localizacao l
+             ON l.id_local = s.id_local
+      WHERE e.id_secao = ?
+      GROUP BY e.id_equip, e.nome, e.unidade
+      ORDER BY e.nome
+      `,
+      [id_SECAO, id_MAN, id_INOP, id_secao]
     );
 
-    const [breakdown] = await db.query(
-      `SELECT 
-         e.nome AS equipamento,
-         l.tipo,
-         COALESCE(v.codigo, '') AS veiculo,
-         COALESCE(c.nome,   '') AS cofre,
-         CAST(s.qty AS UNSIGNED) AS qty
-       FROM inventario_saldo s
-       JOIN localizacao l ON l.id_local = s.id_local
-       JOIN equipamento  e ON e.id_equip = s.id_equip
-       LEFT JOIN veiculo v ON v.id_veiculo = l.id_veiculo
-       LEFT JOIN cofre   c ON c.id_cofre   = l.id_cofre
-       WHERE l.id_secao = ?
-       ORDER BY e.nome, l.tipo, veiculo, cofre`,
-      [id_secao]
-    );
+  // --- Breakdown: 1 linha SECAO por equipamento + todas as linhas COFRE ---
+  const [breakdown] = await db.query(
+    `
+    SELECT 
+      e.nome AS equipamento,
+      'SECAO' AS tipo,
+      '' AS veiculo,
+      '' AS cofre,
+      CAST(COALESCE(s0.qty,0) AS UNSIGNED) AS qty,
+      CAST(COALESCE(sman.qty,0) AS UNSIGNED) AS manutencao,
+      CAST(COALESCE(sinop.qty,0) AS UNSIGNED) AS inop
+    FROM equipamento e
+    LEFT JOIN inventario_saldo s0   ON s0.id_equip = e.id_equip AND s0.id_local   = ?
+    LEFT JOIN inventario_saldo sman ON sman.id_equip = e.id_equip AND sman.id_local = ?
+    LEFT JOIN inventario_saldo sinop ON sinop.id_equip = e.id_equip AND sinop.id_local = ?
+    WHERE e.id_secao = ?
+
+    UNION ALL
+
+    SELECT 
+      e.nome AS equipamento,
+      l.tipo,
+      COALESCE(v.codigo,'') AS veiculo,
+      COALESCE(c.nome,'')   AS cofre,
+      CAST(s.qty AS UNSIGNED) AS qty,
+      0 AS manutencao,
+      0 AS inop
+    FROM inventario_saldo s
+    JOIN localizacao l ON l.id_local = s.id_local AND l.tipo = 'COFRE'
+    JOIN equipamento  e ON e.id_equip = s.id_equip
+    LEFT JOIN veiculo v ON v.id_veiculo = l.id_veiculo
+    LEFT JOIN cofre   c ON c.id_cofre   = l.id_cofre
+    WHERE l.id_secao = ?
+
+    ORDER BY equipamento,
+            CASE WHEN tipo='SECAO' THEN 0 ELSE 1 END,
+            veiculo, cofre
+    `,
+    [id_SECAO, id_MAN, id_INOP, id_secao, id_secao]
+  );
+
+
+
 
     res.json({ totais, breakdown });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
+
 
 /* ========================= PDF Helpers ========================= */
 function fmtPT(d) {
@@ -590,24 +693,30 @@ app.post("/checklists", requireAuth, async (req, res) => {
   const id_veiculo = Number.parseInt(req.body?.id_veiculo, 10);
   const observacoes = (req.body?.observacoes || "").toString().slice(0, 500);
   const itens = Array.isArray(req.body?.itens) ? req.body.itens : [];
+
   if (!Number.isInteger(id_veiculo) || itens.length === 0) {
     return res.status(400).json({ ok: false, error: "invalid_payload" });
   }
 
   await db.beginTransaction();
   try {
+    // 1) Cabeçalho
     const [ins] = await db.query(
-      `INSERT INTO checklist (id_veiculo, id_bombeiro, observacoes, status) VALUES (?,?,?,'closed')`,
+      `INSERT INTO checklist (id_veiculo, id_bombeiro, observacoes, status)
+       VALUES (?,?,?,'closed')`,
       [id_veiculo, req.user.id, observacoes]
     );
     const chkId = ins.insertId;
 
+    // 2) Agregar por (id_local do cofre, id_equip)
+    //    Cada item vindo do FE tem: id_cofre, id_equip, presente, falta, manutencao
     const agg = new Map();
     for (const it of itens) {
       const id_cofre = Number.parseInt(it.id_cofre, 10);
       const id_equip = Number.parseInt(it.id_equip, 10);
-      if (![id_cofre, id_equip].every(Number.isInteger))
+      if (![id_cofre, id_equip].every(Number.isInteger)) {
         throw new Error("id_cofre/id_equip inválidos");
+      }
 
       const id_local = await getCofreLocalId(id_veiculo, id_cofre);
       if (!id_local) throw new Error("cofre/localização não encontrado");
@@ -617,24 +726,89 @@ app.post("/checklists", requireAuth, async (req, res) => {
       const m = Math.max(0, Number(it.manutencao ?? 0));
 
       const k = `${id_local}:${id_equip}`;
-      const cur = agg.get(k) || { p: 0, f: 0, i: 0, m: 0, id_local, id_equip };
+      const cur = agg.get(k) || { id_local, id_equip, p: 0, f: 0, m: 0 };
       cur.p += p;
       cur.f += f;
       cur.m += m;
       agg.set(k, cur);
     }
 
-    const rows = [...agg.values()].map((x) => [chkId, x.id_local, x.id_equip, x.p, x.f, 0, x.m]);
+    // 3) Persistir linhas de checklist (histórico)
+    const rows = [...agg.values()].map((x) => [
+      chkId, x.id_local, x.id_equip, x.p, x.f, x.m, 0 // presente, falta, manutencao, inop
+    ]);
     if (rows.length === 0) throw new Error("sem linhas");
-
     await db.query(
-      `INSERT INTO checklist_item (id_checklist, id_local, id_equip, presente, falta, inop, manutencao) VALUES ?`,
+      `INSERT INTO checklist_item
+      (id_checklist, id_local, id_equip, presente, falta, manutencao, inop)
+      VALUES ?`,
       [rows]
     );
 
-    await db.query(`UPDATE checklist SET closed_at = CURRENT_TIMESTAMP WHERE id=?`, [chkId]);
+    // 4) Aplicar deltas ao stock real
+    //    - Debita do COFRE até ao máximo disponível
+    //    - Da parte debitada: cobre primeiro "falta"; o remanescente é "manutenção"
+    //      que vai para a piscina SECAO_MAN da secção a que pertence o cofre.
+    for (const x of agg.values()) {
+      const id_local_cofre = x.id_local;
+      const id_equip = x.id_equip;
+      const falta = x.f || 0;
+      const manut = x.m || 0;
+
+      const pretendidoTirar = falta + manut;
+      if (pretendidoTirar <= 0) continue;
+
+      await ensureSaldoRow(id_local_cofre, id_equip);
+
+      const disponivelCofre = await getQtyForUpdate(id_local_cofre, id_equip); // FOR UPDATE
+      const efetivoDebitar = Math.min(disponivelCofre, pretendidoTirar);
+
+      if (efetivoDebitar > 0) {
+        // debita do cofre
+        await db.query(
+          `UPDATE inventario_saldo
+             SET qty = qty - ?
+           WHERE id_local=? AND id_equip=?`,
+          [efetivoDebitar, id_local_cofre, id_equip]
+        );
+      }
+
+      // Distribuição do debitado: primeiro cobre 'falta'; o resto é 'manutenção'
+      const faltaEfetiva = Math.min(falta, efetivoDebitar);
+      const manutEfetivaQueVolta = Math.max(0, efetivoDebitar - faltaEfetiva);
+
+      if (manutEfetivaQueVolta > 0) {
+        // descobrir a secção pelo local do cofre
+        const [[loc]] = await db.query(
+          `SELECT id_secao FROM localizacao WHERE id_local=?`,
+          [id_local_cofre]
+        );
+        // ... mantém as variáveis calculadas acima (id_local_cofre, id_equip, falta, manut)
+        const id_secao = await resolveSecaoIdForCofreEquip(id_local_cofre, id_equip);
+        if (id_secao) {
+          const { id_MAN } = await ensureSecaoPools(id_secao);
+          await ensureSaldoRow(id_MAN, id_equip);
+          if (manutEfetivaQueVolta > 0) {
+            await db.query(
+              `UPDATE inventario_saldo
+                SET qty = qty + ?
+              WHERE id_local=? AND id_equip=?`,
+              [manutEfetivaQueVolta, id_MAN, id_equip]
+            );
+          }
+        }
+      }
+    }
+
+    // 5) Fechar + PDF
+    await db.query(
+      `UPDATE checklist SET closed_at = CURRENT_TIMESTAMP WHERE id=?`,
+      [chkId]
+    );
+
     await db.commit();
 
+    // Gera PDF fora da TX (já commitado)
     const [[cab]] = await db.query(
       `SELECT c.id, c.created_at, c.closed_at, c.observacoes,
               v.codigo AS veiculo, b.nome AS autor, b.apelido AS autor_apelido
@@ -655,15 +829,18 @@ app.post("/checklists", requireAuth, async (req, res) => {
         ORDER BY c.nome, e.nome`,
       [chkId]
     );
+
     await gerarPdfChecklist(chkId, cab, rowsForPdf);
 
-    res.json({ ok: true, id: chkId, pdf: `/checklists/${chkId}/pdf` });
+    return res.json({ ok: true, id: chkId, pdf: `/checklists/${chkId}/pdf` });
   } catch (e) {
     await db.rollback().catch(() => {});
     console.error("ERRO /checklists:", e);
-    res.status(400).json({ ok: false, error: e.message });
+    return res.status(400).json({ ok: false, error: e.message || "error" });
   }
 });
+
+
 
 app.get("/checklists", requireAuth, async (req, res) => {
   const { from, to } = req.query;
@@ -1057,6 +1234,362 @@ app.post("/secao/:nome/saida", requireAuth, async (req, res) => {
     return res.status(500).json({ ok: false, error: "server_error" });
   }
 });
+
+// Apagar (soft) do catálogo da secção quando total = 0
+app.delete("/secao/:nome/equipamento/:id", requireAuth, async (req, res) => {
+  try {
+    const secaoNome = req.params.nome;
+    const id_equip = Number.parseInt(req.params.id, 10);
+    if (!Number.isInteger(id_equip)) return res.status(400).json({ ok: false, error: "invalid_id" });
+
+    const id_secao = await getSecaoIdByNome(secaoNome);
+    if (!id_secao) return res.status(404).json({ ok: false, error: "secao_not_found" });
+
+    const [[einfo]] = await db.query(
+      `SELECT id_equip FROM equipamento WHERE id_equip=? AND id_secao=?`,
+      [id_equip, id_secao]
+    );
+    if (!einfo) return res.status(404).json({ ok: false, error: "equip_not_in_secao" });
+
+    const [[tot]] = await db.query(
+      `SELECT CAST(COALESCE(SUM(s.qty),0) AS UNSIGNED) AS total
+         FROM inventario_saldo s
+         JOIN localizacao l ON l.id_local = s.id_local
+        WHERE l.id_secao = ? AND s.id_equip = ?`,
+      [id_secao, id_equip]
+    );
+    if ((tot?.total || 0) > 0) {
+      return res.status(400).json({ ok: false, error: "tem_stock" });
+    }
+
+    await db.beginTransaction();
+    try {
+      await db.query(
+        `DELETE s FROM inventario_saldo s
+          JOIN localizacao l ON l.id_local = s.id_local
+         WHERE l.id_secao = ? AND s.id_equip = ?`,
+        [id_secao, id_equip]
+      );
+      await db.query(
+        `UPDATE equipamento SET ativo = 0 WHERE id_equip=? AND id_secao=?`,
+        [id_equip, id_secao]
+      );
+      await db.commit();
+    } catch (e) {
+      await db.rollback().catch(() => {});
+      console.error("DELETE equipamento soft:", e);
+      return res.status(500).json({ ok: false, error: "tx_error" });
+    }
+
+    res.json({ ok: true });
+  } catch (e) {
+    console.error("DELETE equipamento:", e);
+    res.status(500).json({ ok: false, error: "server_error" });
+  }
+});
+
+
+
+
+/* ========================= Reposição: decidir (REPOSTO/INOP) ========================= */
+app.post("/reposicao/decidir", requireAuth, async (req, res) => {
+  try {
+    const id_veiculo = Number.parseInt(req.body?.id_veiculo, 10);
+    const id_cofre   = Number.parseInt(req.body?.id_cofre, 10);
+    const id_equip   = Number.parseInt(req.body?.id_equip, 10);
+    const decidir    = String(req.body?.decidir || "");
+    const from       = String(req.body?.from || ""); // falta | manutencao | inop (apenas p/ "repor")
+    const qty        = Math.max(1, Number.parseInt(req.body?.qty, 10) || 1);
+
+    if (![id_veiculo, id_cofre, id_equip].every(Number.isInteger))
+      return res.status(400).json({ ok:false, error:"invalid_ids" });
+    if (!["repor","inop"].includes(decidir))
+      return res.status(400).json({ ok:false, error:"invalid_decisao" });
+
+    // Local do COFRE
+    const id_local_cofre = await getCofreLocalId(id_veiculo, id_cofre);
+    if (!id_local_cofre) return res.status(404).json({ ok:false, error:"cofre_not_found" });
+
+    // Secção (via localizacao.id_secao OU equipamento.id_secao)
+    const id_secao = await resolveSecaoIdForCofreEquip(id_local_cofre, id_equip);
+    if (!id_secao) return res.status(404).json({ ok:false, error:"secao_not_found" });
+
+    // Pools da secção
+    const { id_SECAO, id_MAN, id_INOP } = await ensureSecaoPools(id_secao);
+
+    // Garante linhas de saldo base
+    await ensureSaldoRow(id_local_cofre, id_equip);
+    await ensureSaldoRow(id_SECAO,      id_equip);
+    await ensureSaldoRow(id_MAN,        id_equip);
+    await ensureSaldoRow(id_INOP,       id_equip);
+
+    // Último checklist_item para este (cofre,equip) — bloqueado
+    async function lockLastChecklistItem() {
+      const [[last]] = await db.query(
+        `SELECT chki.id, chki.presente, chki.falta, chki.manutencao, chki.inop
+           FROM checklist_item chki
+           JOIN (
+             SELECT id_local, id_equip, MAX(id_checklist) AS last_chk
+               FROM checklist_item
+              WHERE id_local=? AND id_equip=?
+           ) L ON L.id_local = chki.id_local AND L.id_equip = chki.id_equip AND L.last_chk = chki.id_checklist
+          WHERE chki.id_local=? AND chki.id_equip=? FOR UPDATE`,
+        [id_local_cofre, id_equip, id_local_cofre, id_equip]
+      );
+      return last;
+    }
+
+    // ===== REPO R =====
+    if (decidir === "repor") {
+      if (!["falta","manutencao","inop"].includes(from))
+        return res.status(400).json({ ok:false, error:"invalid_from" });
+
+      const origemLocal =
+        from === "falta"       ? id_SECAO :
+        from === "manutencao"  ? id_MAN   :
+                                  id_INOP;
+
+      await db.beginTransaction();
+      try {
+        const last = await lockLastChecklistItem();
+        if (!last) { await db.rollback(); return res.status(404).json({ ok:false, error:"checklist_item_not_found" }); }
+
+        const originCounter = Math.max(0, Number(last[from] ?? 0));
+        const disponivelSrc = await getQtyForUpdate(origemLocal, id_equip);
+        const efetivo       = Math.min(qty, originCounter, disponivelSrc);
+
+        if (efetivo <= 0) {
+          await db.rollback();
+          return res.status(400).json({ ok:false, error:"sem_stock_origem" });
+        }
+
+        // Movimento
+        await db.query(
+          `UPDATE inventario_saldo SET qty = qty - ? WHERE id_local=? AND id_equip=?`,
+          [efetivo, origemLocal, id_equip]
+        );
+        await db.query(
+          `UPDATE inventario_saldo SET qty = qty + ? WHERE id_local=? AND id_equip=?`,
+          [efetivo, id_local_cofre, id_equip]
+        );
+
+        // Checklist: presente+ ; contador origem -
+        await db.query(
+          `UPDATE checklist_item
+              SET presente = presente + ?,
+                  ${from}  = GREATEST(${from} - ?, 0)
+            WHERE id = ?`,
+          [efetivo, efetivo, last.id]
+        );
+
+        const [[upd]] = await db.query(
+          `SELECT falta, manutencao, inop FROM checklist_item WHERE id=?`,
+          [last.id]
+        );
+
+        await db.commit();
+        return res.json({
+          ok: true,
+          decidir: "repor",
+          from,
+          moved: efetivo,
+          updated: upd,
+          checklist_item_id: last.id
+        });
+      } catch (e) {
+        await db.rollback().catch(()=>{});
+        console.error(e);
+        return res.status(500).json({ ok:false, error:"tx_error" });
+      }
+    }
+
+    // ===== INOP =====
+    // Regra pedida: preferir MAN -> INOP; se não houver stock suficiente em MAN,
+    // completar o necessário tirando do COFRE -> INOP (fallback).
+    await db.beginTransaction();
+    try {
+      const last = await lockLastChecklistItem();
+      if (!last) { await db.rollback(); return res.status(404).json({ ok:false, error:"checklist_item_not_found" }); }
+
+      const maxByChk   = Math.max(0, Number(last.manutencao || 0));
+      const pedido     = Math.min(qty, maxByChk);
+      if (pedido <= 0) {
+        await db.rollback();
+        return res.status(400).json({ ok:false, error:"sem_manutencao_para_inop" });
+      }
+
+      const dispMan    = await getQtyForUpdate(id_MAN, id_equip);
+      const moveDeMan  = Math.min(pedido, dispMan);
+
+      let moved = 0;
+
+      // 1) MAN -> INOP
+      if (moveDeMan > 0) {
+        await db.query(
+          `UPDATE inventario_saldo SET qty = qty - ? WHERE id_local=? AND id_equip=?`,
+          [moveDeMan, id_MAN, id_equip]
+        );
+        await db.query(
+          `UPDATE inventario_saldo SET qty = qty + ? WHERE id_local=? AND id_equip=?`,
+          [moveDeMan, id_INOP, id_equip]
+        );
+        moved += moveDeMan;
+      }
+
+      // 2) Fallback: COFRE -> INOP para cumprir o que falta
+      const faltaCumprir = pedido - moved;
+      if (faltaCumprir > 0) {
+        const dispCofre = await getQtyForUpdate(id_local_cofre, id_equip);
+        const moveDeCofre = Math.min(faltaCumprir, dispCofre);
+        if (moveDeCofre > 0) {
+          await db.query(
+            `UPDATE inventario_saldo SET qty = qty - ? WHERE id_local=? AND id_equip=?`,
+            [moveDeCofre, id_local_cofre, id_equip]
+          );
+          await db.query(
+            `UPDATE inventario_saldo SET qty = qty + ? WHERE id_local=? AND id_equip=?`,
+            [moveDeCofre, id_INOP, id_equip]
+          );
+          moved += moveDeCofre;
+        }
+      }
+
+      if (moved <= 0) {
+        await db.rollback();
+        return res.status(400).json({ ok:false, error:"sem_stock_para_inop" });
+      }
+
+      // Checklist: baixa 'manutencao' e sobe 'inop' pelo total efetivo
+      await db.query(
+        `UPDATE checklist_item
+            SET manutencao = GREATEST(manutencao - ?, 0),
+                inop       = inop + ?
+          WHERE id = ?`,
+        [moved, moved, last.id]
+      );
+
+      const [[upd]] = await db.query(
+        `SELECT falta, manutencao, inop FROM checklist_item WHERE id=?`,
+        [last.id]
+      );
+
+      await db.commit();
+      return res.json({
+        ok: true,
+        decidir: "inop",
+        moved,
+        updated: upd,
+        checklist_item_id: last.id
+      });
+    } catch (e) {
+      await db.rollback().catch(()=>{});
+      console.error(e);
+      return res.status(500).json({ ok:false, error:"tx_error" });
+    }
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ ok:false, error:"server_error" });
+  }
+});
+
+
+
+
+
+app.get("/reposicao", requireAuth, async (_req, res) => {
+  try {
+    const [rows] = await db.query(`
+      SELECT
+        v.id_veiculo, c.id_cofre, e.id_equip,
+        v.codigo AS veiculo, c.nome AS cofre, e.nome AS equipamento,
+        CAST(ci.inop AS UNSIGNED) AS inop,
+        CAST(ci.falta AS UNSIGNED) AS falta,
+        CAST(ci.manutencao AS UNSIGNED) AS manutencao
+      FROM checklist_item ci
+      JOIN (
+        SELECT id_local, id_equip, MAX(id_checklist) AS last_chk
+        FROM checklist_item
+        GROUP BY id_local, id_equip
+      ) last ON last.id_local = ci.id_local AND last.id_equip = ci.id_equip AND last.last_chk = ci.id_checklist
+      JOIN localizacao l ON l.id_local = ci.id_local
+      LEFT JOIN veiculo v ON v.id_veiculo = l.id_veiculo
+      LEFT JOIN cofre   c ON c.id_cofre   = l.id_cofre
+      JOIN equipamento  e ON e.id_equip   = ci.id_equip
+      WHERE (ci.falta > 0 OR ci.manutencao > 0 OR ci.inop > 0)
+      ORDER BY v.codigo, c.nome, e.nome
+    `);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ ok:false, error:e.message });
+  }
+});
+
+
+// DELETE /veiculo/:idVeiculo/cofre/:idCofre/item/:idEquip
+// DELETE total do item no cofre -> devolve tudo à SECAO e remove a linha do cofre
+app.delete("/veiculo/:id/cofre/:cofreId/item/:idEquip", requireAuth, async (req, res) => {
+  const idVeic  = Number.parseInt(req.params.id, 10);
+  const idCofre = Number.parseInt(req.params.cofreId, 10);
+  const idEquip = Number.parseInt(req.params.idEquip, 10);
+
+  if (![idVeic, idCofre, idEquip].every(Number.isInteger)) {
+    return res.status(400).json({ ok: false, error: "invalid_params" });
+  }
+
+  try {
+    await db.beginTransaction();
+
+    // 1) Local do cofre
+    const id_local_cofre = await getCofreLocalId(idVeic, idCofre);
+    if (!id_local_cofre) {
+      await db.rollback();
+      return res.status(404).json({ ok: false, error: "cofre_not_found" });
+    }
+
+    // 2) Secção (pelas tuas helpers)
+    const id_secao = await resolveSecaoIdForCofreEquip(id_local_cofre, idEquip);
+    if (!id_secao) {
+      await db.rollback();
+      return res.status(404).json({ ok: false, error: "secao_not_found" });
+    }
+    const { id_SECAO } = await ensureSecaoPools(id_secao);
+
+    // 3) Garantir linhas de saldo base
+    await ensureSaldoRow(id_local_cofre, idEquip);
+    await ensureSaldoRow(id_SECAO,      idEquip);
+
+    // 4) Lock + qty atual no cofre
+    const qtyAtual = await getQtyForUpdate(id_local_cofre, idEquip); // FOR UPDATE
+    const qty = Math.max(0, Number(qtyAtual || 0));
+
+    // Se não tiver qty, apenas apaga a linha (se existir) e termina
+    if (qty > 0) {
+      // movimento: COFRE -> SECAO
+      await db.query(
+        `UPDATE inventario_saldo SET qty = qty - ? WHERE id_local=? AND id_equip=?`,
+        [qty, id_local_cofre, idEquip]
+      );
+      await db.query(
+        `UPDATE inventario_saldo SET qty = qty + ? WHERE id_local=? AND id_equip=?`,
+        [qty, id_SECAO, idEquip]
+      );
+    }
+
+    // 5) Remover completamente a row do cofre para desaparecer do FE
+    await db.query(
+      `DELETE FROM inventario_saldo WHERE id_local=? AND id_equip=?`,
+      [id_local_cofre, idEquip]
+    );
+
+    await db.commit();
+    return res.json({ ok: true, removed_qty: qty });
+  } catch (e) {
+    console.error("DELETE cofre item:", e);
+    try { await db.rollback(); } catch {}
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
+
 
 
 /* ========================= Start ========================= */

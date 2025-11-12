@@ -1,27 +1,18 @@
-// src/pages/VehicleInventarioPage.jsx
 import { useEffect, useMemo, useState } from 'react';
 import { API_BASE as API } from '../lib/api'; 
 
 export default function VehicleInventarioPage({ onBack, secaoNome = 'Material' }) {
   const [veiculos, setVeiculos] = useState([]);
-  const [veicSel, setVeicSel] = useState('');      
-
+  const [veicSel, setVeicSel] = useState('');
   const [cofres, setCofres] = useState([]);
-  const [cofreSel, setCofreSel] = useState('');  
-
-  const [invVeiculo, setInvVeiculo] = useState([]); 
+  const [cofreSel, setCofreSel] = useState('');
+  const [invVeiculo, setInvVeiculo] = useState([]);
   const [erro, setErro] = useState('');
   const [loading, setLoading] = useState(false);
-
-  // armazém da secção
   const [catalogo, setCatalogo] = useState([]);
   const [saldosSecao, setSaldosSecao] = useState([]);
-
-  // adicionar
   const [equipAdd, setEquipAdd] = useState('');
   const [qtyAdd, setQtyAdd] = useState('');
-
-  // remover
   const [equipRm, setEquipRm] = useState('');
   const [qtyRm, setQtyRm] = useState('');
 
@@ -116,10 +107,8 @@ export default function VehicleInventarioPage({ onBack, secaoNome = 'Material' }
     const qty = Number.parseInt(qtyAdd, 10);
     if (!Number.isInteger(id_equip) || !Number.isInteger(qty) || qty <= 0)
       return setErro('Selecione equipamento e quantidade válida (>0).');
-
     const disponivel = saldoDisponivelSecao(id_equip);
     if (qty > disponivel) return setErro(`Qtd maior que disponível na secção (${disponivel}).`);
-
     setErro('');
     try {
       const res = await fetch(`${API}/veiculo/${veicSel}/cofre/${cofreSel}/entrada`, {
@@ -144,10 +133,8 @@ export default function VehicleInventarioPage({ onBack, secaoNome = 'Material' }
     const qty = Number.parseInt(qtyRm, 10);
     if (!Number.isInteger(id_equip) || !Number.isInteger(qty) || qty <= 0)
       return setErro('Selecione equipamento e quantidade válida (>0).');
-
     const disponivel = saldoNoCofre(id_equip);
     if (qty > disponivel) return setErro(`Qtd maior que disponível no cofre (${disponivel}).`);
-
     setErro('');
     try {
       const res = await fetch(`${API}/veiculo/${veicSel}/cofre/${cofreSel}/saida`, {
@@ -163,6 +150,53 @@ export default function VehicleInventarioPage({ onBack, secaoNome = 'Material' }
       setErro(`Falha ao remover: ${e2.message}`);
     }
   };
+
+const removerLinha = async (row) => {
+  if (!veicSel) return;
+  const ok = window.confirm(`Remover totalmente "${row.equipamento}" do "${row.cofre}"?`);
+  if (!ok) return;
+
+  setLoading(true);
+  setErro('');
+
+  try {
+    const res = await fetch(
+      `${API}/veiculo/${veicSel}/cofre/${row.id_cofre}/item/${row.id_equip}`,
+      {
+        method: 'DELETE',
+        credentials: 'include',               // IMPORTANTE: envia cookie de sessão
+        headers: { 'Accept': 'application/json' }
+      }
+    );
+
+    // Lida com respostas 204 (sem corpo) ou sem JSON
+    let body = null;
+    const ct = res.headers.get('content-type') || '';
+    if (ct.includes('application/json')) {
+      body = await res.json().catch(() => null);
+    }
+
+    if (!res.ok) {
+      const msg = body?.error || `HTTP ${res.status}`;
+      throw new Error(msg);
+    }
+
+    // Mantém tudo sincronizado
+    const s = await fetch(
+      `${API}/secao/${encodeURIComponent(secaoNome)}/saldos-armazem`,
+      { credentials: 'include' }
+    ).then(async (r) => (r.ok ? r.json() : []));
+    setSaldosSecao(Array.isArray(s) ? s : []);
+
+    await refreshInventarioVeiculo(veicSel);
+  } catch (e) {
+    console.error('Falha ao remover linha:', e);
+    setErro(`Falha ao remover linha: ${e.message}`);
+  } finally {
+    setLoading(false);
+  }
+};
+
 
   return (
     <div className="page">
@@ -225,6 +259,7 @@ export default function VehicleInventarioPage({ onBack, secaoNome = 'Material' }
                 <th>Cofre</th>
                 <th>Equipamento</th>
                 <th className="num">Qtd</th>
+                <th>Ações</th>
               </tr>
             </thead>
             <tbody>
@@ -233,6 +268,16 @@ export default function VehicleInventarioPage({ onBack, secaoNome = 'Material' }
                   <td>{r.cofre}</td>
                   <td>{r.equipamento}</td>
                   <td className="num">{Number.isFinite(+r.qty) ? parseInt(r.qty, 10) : 0}</td>
+                  <td>
+                    <button
+                      type="button"
+                      onClick={() => { console.log('REMOVER->', r); removerLinha(r); }}
+                      disabled={loading}
+                      aria-label={`Remover ${r.equipamento} do ${r.cofre}`}
+                    >
+                      REMOVER
+                    </button>
+                  </td>
                 </tr>
               ))}
               {(!Array.isArray(invVeiculo) || invVeiculo.length === 0) && (
