@@ -152,6 +152,7 @@ export default function VehicleInventarioPage({ onBack, secaoNome = 'Material' }
   };
 
 const removerLinha = async (row) => {
+  console.log('[removerLinha] clicado:', row);
   if (!veicSel) return;
   const ok = window.confirm(`Remover totalmente "${row.equipamento}" do "${row.cofre}"?`);
   if (!ok) return;
@@ -271,11 +272,11 @@ const removerLinha = async (row) => {
                   <td>
                     <button
                       type="button"
-                      onClick={() => { console.log('REMOVER->', r); removerLinha(r); }}
+                      onClick={() => { console.log('[btn remover]'); removerLinha(r); }}
                       disabled={loading}
                       aria-label={`Remover ${r.equipamento} do ${r.cofre}`}
                     >
-                      REMOVER
+                      Remover
                     </button>
                   </td>
                 </tr>
